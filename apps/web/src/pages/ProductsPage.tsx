@@ -6,6 +6,7 @@ import { useAuth } from '../lib/auth';
 import { useConfirm, useToast } from '../lib/feedback';
 import { ListBar, IconAction } from '../components/ListBar';
 import { useColumns } from '../lib/columns';
+import { WarehouseMultiSelect } from '../components/WarehouseMultiSelect';
 import {
   Badge, Button, Card, Empty, Field, Input, Label, Modal, NumberInput, PageHeader, Pager, Select, StatCard, StatGrid, Table, Td, Th,
 } from '../components/ui';
@@ -169,29 +170,17 @@ function ProductFormWizard({
               setCategoryName('');
             }}>إضافة</Button>
           </div>
-          <Field label="المخازن" icon={<Warehouse size={16} />} hint="اختار مخزن أو أكتر. لو مفيش اختيار، الصنف يبقى لكل المخازن">
-            <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-3">
-              {warehouses.length === 0 ? <span className="text-xs text-muted">مفيش مخازن</span> : warehouses.map((warehouse) => {
-                const checked = form.warehouseIds.includes(warehouse.id);
-                return (
-                  <label key={warehouse.id} className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-bold ${checked ? 'border-brand-300 bg-brand-50 text-brand-800' : 'border-slate-200 text-slate-600'}`}>
-                    <input
-                      type="checkbox"
-                      className="accent-[var(--color-brand-700)]"
-                      checked={checked}
-                      onChange={(event) => {
-                        const warehouseIds = event.target.checked
-                          ? [...form.warehouseIds, warehouse.id]
-                          : form.warehouseIds.filter((id) => id !== warehouse.id);
-                        setForm({ ...form, warehouseIds });
-                      }}
-                    />
-                    {warehouse.name}
-                  </label>
-                );
-              })}
-            </div>
-          </Field>
+          <div>
+            <Label>
+              <span className="inline-flex items-center gap-1.5"><Warehouse size={15} className="text-slate-400" /> المخازن</span>
+            </Label>
+            <WarehouseMultiSelect
+              warehouses={warehouses}
+              value={form.warehouseIds}
+              onChange={(warehouseIds) => setForm({ ...form, warehouseIds })}
+              hint="اختار مخزن أو أكتر. لو مفيش اختيار، الصنف يبقى لكل المخازن"
+            />
+          </div>
         </div>
       )}
       {step === 1 && (

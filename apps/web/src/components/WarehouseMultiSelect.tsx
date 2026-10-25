@@ -1,3 +1,5 @@
+import { Check } from 'lucide-react';
+
 type Warehouse = { id: string; name: string };
 
 export function WarehouseMultiSelect({
@@ -13,22 +15,24 @@ export function WarehouseMultiSelect({
 }) {
   return (
     <div>
-      <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-3">
+      <div className="grid gap-2 rounded-xl border border-slate-200 bg-white p-2.5 sm:grid-cols-2">
         {warehouses.length === 0 ? (
-          <span className="text-xs text-muted">مفيش مخازن</span>
+          <span className="px-1 text-xs text-muted">مفيش مخازن</span>
         ) : (
           warehouses.map((warehouse) => {
             const checked = value.includes(warehouse.id);
             return (
               <label
                 key={warehouse.id}
-                className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-bold ${
-                  checked ? 'border-brand-300 bg-brand-50 text-brand-800' : 'border-slate-200 text-slate-600'
+                className={`flex min-h-10 cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 text-[13px] font-bold transition ${
+                  checked
+                    ? 'border-brand-300 bg-brand-50 text-brand-800'
+                    : 'border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
                 }`}
               >
                 <input
                   type="checkbox"
-                  className="accent-[var(--color-brand-700)]"
+                  className="sr-only"
                   checked={checked}
                   onChange={(event) => {
                     onChange(
@@ -38,13 +42,20 @@ export function WarehouseMultiSelect({
                     );
                   }}
                 />
-                {warehouse.name}
+                <span
+                  className={`grid h-4 w-4 shrink-0 place-items-center rounded border ${
+                    checked ? 'border-brand-700 bg-brand-700 text-white' : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  {checked && <Check size={12} strokeWidth={3} />}
+                </span>
+                <span className="min-w-0 truncate" title={warehouse.name}>{warehouse.name}</span>
               </label>
             );
           })
         )}
       </div>
-      {hint ? <p className="mt-1.5 text-[11px] text-muted">{hint}</p> : null}
+      {hint ? <p className="mt-1.5 text-xs text-muted">{hint}</p> : null}
     </div>
   );
 }

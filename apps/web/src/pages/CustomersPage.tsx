@@ -11,7 +11,7 @@ import { NotesPanel } from '../components/NotesPanel';
 import { EntityWorkspace } from '../components/EntityWorkspace';
 import { WarehouseMultiSelect } from '../components/WarehouseMultiSelect';
 import {
-  Badge, Button, Card, Empty, Field, Input, Modal, PageHeader, Pager, PrintHeader, Select, StatCard, StatGrid, Table, Td, Th,
+  Badge, Button, Card, Empty, Field, Input, Label, Modal, PageHeader, Pager, PrintHeader, Select, StatCard, StatGrid, Table, Td, Th,
 } from '../components/ui';
 
 type Customer = {
@@ -373,13 +373,17 @@ export function CustomersPage() {
               <option value="WHOLESALE">جملة</option>
             </Select>
           </Field>
-          <Field label="المخازن" icon={<Warehouse size={16} />} hint="العميل يظهر ليوزر المخازن دي فقط">
+          <div>
+            <Label>
+              <span className="inline-flex items-center gap-1.5"><Warehouse size={15} className="text-slate-400" /> المخازن</span>
+            </Label>
             <WarehouseMultiSelect
               warehouses={warehouses}
               value={form.warehouseIds}
               onChange={(warehouseIds) => setForm({ ...form, warehouseIds })}
+              hint="العميل يظهر ليوزر المخازن دي فقط. لو مفيش اختيار يظهر للكل"
             />
-          </Field>
+          </div>
           {editingId && (
             <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
               <input type="checkbox" checked={form.isActive} onChange={(event) => setForm({ ...form, isActive: event.target.checked })} />
