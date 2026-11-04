@@ -13,6 +13,9 @@ apps/api/prisma/*.db
 apps/api/prisma/*.db-journal
 apps/api/prisma/prisma
 apps/api/backups
+apps/api/desktop-releases/*
+!apps/api/desktop-releases/.gitkeep
+!apps/api/desktop-releases/README.md
 apps/api/prisma/test-business.db
 apps/desktop/src-tauri/target
 uploads

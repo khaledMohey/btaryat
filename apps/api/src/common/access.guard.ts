@@ -47,7 +47,7 @@ export function pageForPath(path: string) {
 
 export function actionFor(method: string, path: string, page: PageId) {
   const verb = method.toUpperCase();
-  if (/\/backup|\/restore|\/backups/.test(path)) return 'backup';
+  if (/\/backup|\/restore|\/backups|\/desktop-download/.test(path)) return 'backup';
   if (verb === 'GET' || verb === 'HEAD') return /export|xlsx/i.test(path) ? 'export' : 'view';
   if (/\/confirm$/.test(path)) return 'confirm';
   if (page === 'cash' && /\/receipts$/.test(path)) return 'receipt';

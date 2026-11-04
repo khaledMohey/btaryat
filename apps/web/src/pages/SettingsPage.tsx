@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Building2, DatabaseBackup, FileArchive, Lock, Save, Server, ShieldCheck, UserPlus, Users, Warehouse } from 'lucide-react';
+import { Building2, DatabaseBackup, Download, FileArchive, Lock, Monitor, Save, Server, ShieldCheck, UserPlus, Users, Warehouse } from 'lucide-react';
 import { api, getApiBase, setApiBase, setSettingsToken } from '../lib/api';
 import { ROLE_LABELS } from '../lib/nav';
 import { useAuth } from '../lib/auth';
@@ -42,11 +42,12 @@ export function SettingsPage() {
   const [editWarehouseIds, setEditWarehouseIds] = useState<string[]>([]);
   const [backups, setBackups] = useState<string[]>([]);
   const [editingLook, setEditingLook] = useState(false);
-  const [busy, setBusy] = useState<'' | 'settings' | 'backup' | 'user' | 'password' | 'edit' | 'period'>('');
+  const [busy, setBusy] = useState<'' | 'settings' | 'backup' | 'user' | 'password' | 'edit' | 'period' | 'desktop'>('');
   const [gate, setGate] = useState('');
   const [unlocked, setUnlocked] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
   const [editPassword, setEditPassword] = useState({ next: '', confirm: '' });
+  const [desktopPassword, setDesktopPassword] = useState('');
   const [periods, setPeriods] = useState<PeriodRow[]>([]);
   const [periodLog, setPeriodLog] = useState<PeriodLog[]>([]);
   const [reopenKey, setReopenKey] = useState('');
@@ -227,6 +228,45 @@ export function SettingsPage() {
     }
   }
 
+  async function downloadDesktop() {
+    if (!desktopPassword.trim()) {
+      toast.error('اكتب كلمة سر التحميل');
+      return;
+    }
+    setBusy('desktop');
+    try {
+      const res = await api<{ mode: 'url' | 'token'; url?: string; token?: string; fileName?: string }>('/settings/desktop-download', {
+        method: 'POST',
+        body: JSON.stringify({ password: desktopPassword }),
+      });
+      setDesktopPassword('');
+      if (res.mode === 'url' && res.url) {
+        const link = document.createElement('a');
+        link.href = res.url;
+        link.rel = 'noopener';
+        link.download = res.fileName || 'm5azen-desktop-setup.exe';
+        link.target = '_blank';
+        link.click();
+        toast.success('بدأ تحميل نسخة الديسكتوب');
+        return;
+      }
+      if (res.mode !== 'token' || !res.token) {
+        throw new Error('نسخة الديسكتوب غير متاحة حالياً');
+      }
+      const blob = await api<Blob>(`/settings/desktop-download/file?token=${encodeURIComponent(res.token)}`);
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = res.fileName || 'm5azen-desktop-setup.exe';
+      link.click();
+      URL.revokeObjectURL(link.href);
+      toast.success('بدأ تحميل نسخة الديسكتوب');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'تعذر التحميل');
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function addUser() {
     if (!userForm.username.trim() || !userForm.password || !userForm.fullName.trim()) {
       toast.error('أدخل اسم الدخول والاسم وكلمة السر');
@@ -370,6 +410,29 @@ export function SettingsPage() {
           </Card>
         )}
       </div>
+
+      {isAdmin && (
+        <Card className="mt-4">
+          <CardHeader title="نسخة الديسكتوب أوفلاين" subtitle="تنزيل Setup يشتغل لوحده بـ SQLite من غير ما يعتمد على الويب" icon={Monitor} />
+          <form className="flex max-w-xl flex-wrap items-end gap-3" onSubmit={(e) => { e.preventDefault(); downloadDesktop(); }}>
+            <div className="min-w-56 flex-1">
+              <Label>كلمة سر التحميل</Label>
+              <Input
+                type="password"
+                value={desktopPassword}
+                onChange={(e) => setDesktopPassword(e.target.value)}
+                autoComplete="off"
+                dir="ltr"
+                placeholder="••••••••"
+              />
+            </div>
+            <Button type="submit" disabled={busy === 'desktop' || !desktopPassword}>
+              <Download size={16} /> تنزيل نسخة الديسكتوب
+            </Button>
+          </form>
+          <p className="mt-2 text-xs text-muted">التحقق من السيرفر فقط — كلمة السر مش موجودة في الفرونت.</p>
+        </Card>
+      )}
 
       <Card className="mt-4">
         <CardHeader title="كلمة سر الدخول" subtitle="تغيير كلمة السر اللي بتدخل بيها للنظام" icon={ShieldCheck} />

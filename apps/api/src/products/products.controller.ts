@@ -206,4 +206,10 @@ export class ProductsController {
   update(@Param('id') id: string, @Body() dto: UpdateProductDto) {
     return this.service.update(id, dto);
   }
+
+  @Delete(':id')
+  @Roles(Role.ADMIN, Role.WAREHOUSE)
+  remove(@Param('id') id: string) {
+    return this.service.remove(id);
+  }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Barcode, Boxes, Coins, Columns3, Package, Pencil, Plus, Tag, TrendingDown, TriangleAlert, Upload, Warehouse } from 'lucide-react';
+import { Barcode, Boxes, Coins, Columns3, Package, Pencil, Plus, Tag, Trash2, TrendingDown, TriangleAlert, Upload, Warehouse } from 'lucide-react';
 import { loadExcel } from '../lib/excel';
 import { api, formatMoney, getApiBase, initialQuery, productImageUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -401,6 +401,27 @@ export function ProductsPage() {
     setEditOpen(true);
   }
 
+  async function removeProduct(product: Product) {
+    const ok = await confirm({
+      title: 'حذف الصنف',
+      message: `حذف «${product.name}»؟ متاح فقط لو مفيش عليه فواتير أو حركات مخزون.`,
+      confirmLabel: 'حذف',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api(`/products/${product.id}`, { method: 'DELETE' });
+      if (editing?.id === product.id) {
+        setEditOpen(false);
+        setEditing(null);
+      }
+      toast.success('تم حذف الصنف');
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'تعذر حذف الصنف');
+    }
+  }
+
   async function saveEdit() {
     if (!editing) return;
     const problems = productIssues(editForm, items, editing.id, editing.costPrice).errors;
@@ -626,7 +647,10 @@ export function ProductsPage() {
                 return (
                   <tr key={p.id}>
                     <Td>
-                      <IconAction label="تعديل" onClick={() => openEdit(p)}><Pencil size={14} /></IconAction>
+                      <div className="flex items-center gap-0.5">
+                        <IconAction label="تعديل" onClick={() => openEdit(p)}><Pencil size={14} /></IconAction>
+                        <IconAction label="حذف" danger onClick={() => removeProduct(p)}><Trash2 size={14} /></IconAction>
+                      </div>
                     </Td>
                     {productColumns.visible('sku') && <Td><span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs font-bold text-slate-700" dir="ltr">{p.sku}</span></Td>}
                     {productColumns.visible('barcode') && <Td><span className="font-mono text-xs text-slate-500" dir="ltr">{p.barcode || '—'}</span></Td>}
@@ -736,6 +760,12 @@ export function ProductsPage() {
             onSubmit={saveEdit}
             submitLabel="حفظ التعديلات"
           />
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <Button type="button" variant="danger" onClick={() => removeProduct(editing)}>
+              <Trash2 size={14} /> حذف الصنف
+            </Button>
+            <p className="mt-2 text-xs text-muted">الحذف يتاح فقط لو الصنف من غير فواتير أو حركات مخزون.</p>
+          </div>
           </>
         )}
       </Modal>

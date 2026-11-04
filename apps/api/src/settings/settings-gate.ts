@@ -21,6 +21,12 @@ export function settingsPasswordMatches(password: string) {
   return safeEqual(password, expected);
 }
 
+export function desktopDownloadPasswordMatches(password: string) {
+  const expected = process.env.DESKTOP_DOWNLOAD_PASSWORD || '';
+  if (!expected || !password) return false;
+  return safeEqual(password, expected);
+}
+
 function signToken(purpose: string) {
   const exp = Date.now() + TTL_MS;
   const body = Buffer.from(JSON.stringify({ purpose, exp })).toString('base64url');
@@ -55,6 +61,35 @@ export function signEditToken() {
 
 export function verifyEditToken(token?: string) {
   return readToken(token, 'edit');
+}
+
+const DESKTOP_TTL_MS = 2 * 60 * 1000;
+
+export function signDesktopDownloadToken(fileName: string) {
+  const exp = Date.now() + DESKTOP_TTL_MS;
+  const body = Buffer.from(JSON.stringify({ purpose: 'desktop-download', exp, fileName })).toString('base64url');
+  const sig = createHmac('sha256', secret()).update(body).digest('base64url');
+  return `${body}.${sig}`;
+}
+
+export function verifyDesktopDownloadToken(token?: string): { ok: true; fileName: string } | { ok: false } {
+  if (!token || !token.includes('.')) return { ok: false };
+  const [body, sig] = token.split('.');
+  const expected = createHmac('sha256', secret()).update(body).digest('base64url');
+  if (!safeEqual(sig, expected)) return { ok: false };
+  try {
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString()) as {
+      purpose?: string;
+      exp?: number;
+      fileName?: string;
+    };
+    if (payload.purpose !== 'desktop-download' || typeof payload.exp !== 'number' || payload.exp <= Date.now()) {
+      return { ok: false };
+    }
+    return { ok: true, fileName: payload.fileName || 'm5azen-desktop-setup.exe' };
+  } catch {
+    return { ok: false };
+  }
 }
 
 @Injectable()

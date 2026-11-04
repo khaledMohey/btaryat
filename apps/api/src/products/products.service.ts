@@ -211,6 +211,69 @@ export class ProductsService {
     });
   }
 
+  async remove(id: string) {
+    await this.findOne(id);
+    const [
+      salesLines,
+      purchaseLines,
+      salesReturnLines,
+      purchaseReturnLines,
+      stockMovements,
+      transferLines,
+      documentLines,
+      replacementReturns,
+      oldBatteries,
+      stockedOldBatteries,
+      replacementOldBatteries,
+      stockQty,
+    ] = await Promise.all([
+      this.prisma.salesInvoiceLine.count({ where: { productId: id } }),
+      this.prisma.purchaseInvoiceLine.count({ where: { productId: id } }),
+      this.prisma.salesReturnLine.count({ where: { productId: id } }),
+      this.prisma.purchaseReturnLine.count({ where: { productId: id } }),
+      this.prisma.stockMovement.count({ where: { productId: id } }),
+      this.prisma.stockTransferLine.count({ where: { productId: id } }),
+      this.prisma.tradeDocumentLine.count({ where: { productId: id } }),
+      this.prisma.salesReturn.count({ where: { replacementProductId: id } }),
+      this.prisma.oldBattery.count({ where: { productId: id } }),
+      this.prisma.oldBattery.count({ where: { stockProductId: id } }),
+      this.prisma.oldBattery.count({ where: { replacementProductId: id } }),
+      this.prisma.stockBalance.aggregate({ where: { productId: id }, _sum: { quantity: true } }),
+    ]);
+
+    const reasons: string[] = [];
+    if (salesLines) reasons.push('فواتير بيع');
+    if (purchaseLines) reasons.push('فواتير شراء');
+    if (salesReturnLines || replacementReturns) reasons.push('مرتجعات بيع');
+    if (purchaseReturnLines) reasons.push('مرتجعات شراء');
+    if (stockMovements) reasons.push('حركات مخزون');
+    if (transferLines) reasons.push('تحويلات مخزن');
+    if (documentLines) reasons.push('مستندات تجارية');
+    if (oldBatteries || stockedOldBatteries || replacementOldBatteries) reasons.push('بطاريات مستعملة');
+    if ((stockQty._sum.quantity || 0) !== 0) reasons.push('رصيد مخزون');
+
+    if (reasons.length) {
+      throw new BadRequestException(`لا يمكن حذف الصنف لوجود معاملات عليه: ${reasons.join('، ')}`);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.productFieldValue.deleteMany({ where: { productId: id } });
+      await tx.productWarehouse.deleteMany({ where: { productId: id } });
+      await tx.customerPrice.deleteMany({ where: { productId: id } });
+      await tx.productLocation.deleteMany({ where: { productId: id } });
+      await tx.stockBalance.deleteMany({ where: { productId: id } });
+      await tx.fileBlob.deleteMany({ where: { key: { startsWith: `products/${id}.` } } });
+      await tx.product.delete({ where: { id } });
+    });
+
+    for (const ext of ['.png', '.jpg', '.webp', '.gif']) {
+      const previous = join(this.imageDir(), `${id}${ext}`);
+      if (existsSync(previous)) unlinkSync(previous);
+    }
+
+    return { ok: true };
+  }
+
   async update(
     id: string,
     data: {

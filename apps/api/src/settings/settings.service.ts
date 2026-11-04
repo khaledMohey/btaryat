@@ -224,6 +224,44 @@ export class SettingsService {
       .sort()
       .reverse();
   }
+
+  /** External URL for the desktop installer (e.g. GitHub release / object storage). Never exposed without password check. */
+  desktopDownloadUrl() {
+    return (process.env.DESKTOP_DOWNLOAD_URL || '').trim();
+  }
+
+  resolveDesktopInstaller(): { path: string; fileName: string } | null {
+    const configured = (process.env.DESKTOP_INSTALLER_PATH || '').trim();
+    if (configured && existsSync(configured)) {
+      return { path: configured, fileName: configured.split(/[/\\]/).pop() || 'm5azen-desktop-setup.exe' };
+    }
+    const dirs = [
+      join(process.cwd(), 'desktop-releases'),
+      join(process.cwd(), 'apps', 'api', 'desktop-releases'),
+      join(__dirname, '..', '..', 'desktop-releases'),
+    ];
+    for (const dir of dirs) {
+      if (!existsSync(dir)) continue;
+      const files = readdirSync(dir)
+        .filter((file) => /\.(exe|msi|zip)$/i.test(file))
+        .sort()
+        .reverse();
+      if (files[0]) return { path: join(dir, files[0]), fileName: files[0] };
+    }
+    return null;
+  }
+
+  readDesktopInstaller(fileNameHint?: string) {
+    const resolved = this.resolveDesktopInstaller();
+    if (!resolved) throw new BadRequestException('نسخة الديسكتوب غير متاحة حالياً');
+    if (fileNameHint && resolved.fileName !== fileNameHint) {
+      throw new BadRequestException('رابط التحميل غير صالح');
+    }
+    return {
+      fileName: resolved.fileName,
+      data: readFileSync(resolved.path),
+    };
+  }
 }
 
 const SNAPSHOT_MODELS = [

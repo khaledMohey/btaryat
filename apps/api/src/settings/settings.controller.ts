@@ -1,10 +1,18 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { IsNumber, IsObject, IsString, MinLength } from 'class-validator';
 import { Role } from '@prisma/client';
 import { SettingsService } from './settings.service';
 import { Roles } from '../common/guards';
-import { SettingsGateGuard, settingsPasswordMatches, signEditToken, signSettingsToken } from './settings-gate';
+import {
+  SettingsGateGuard,
+  desktopDownloadPasswordMatches,
+  settingsPasswordMatches,
+  signDesktopDownloadToken,
+  signEditToken,
+  signSettingsToken,
+  verifyDesktopDownloadToken,
+} from './settings-gate';
 import * as bcrypt from 'bcryptjs';
 
 class UpdateSettingsDto {
@@ -122,5 +130,42 @@ export class SettingsController {
   @UseGuards(SettingsGateGuard)
   restore(@Body() body: { version?: number; tables?: Record<string, unknown[]> }) {
     return this.service.restore(body);
+  }
+
+  @Post('desktop-download')
+  @Roles(Role.ADMIN)
+  @UseGuards(SettingsGateGuard)
+  requestDesktopDownload(@Body() dto: UnlockSettingsDto) {
+    if (!process.env.DESKTOP_DOWNLOAD_PASSWORD) {
+      throw new BadRequestException('تحميل الديسكتوب غير مفعّل على السيرفر');
+    }
+    if (!desktopDownloadPasswordMatches(dto.password)) {
+      throw new BadRequestException('كلمة سر التحميل غير صحيحة');
+    }
+    const externalUrl = this.service.desktopDownloadUrl();
+    if (externalUrl) {
+      return { mode: 'url' as const, url: externalUrl, fileName: externalUrl.split('/').pop() || 'm5azen-desktop-setup.exe' };
+    }
+    const local = this.service.resolveDesktopInstaller();
+    if (!local) {
+      throw new BadRequestException('نسخة الديسكتوب لسه مش مرفوعة على السيرفر');
+    }
+    return {
+      mode: 'token' as const,
+      token: signDesktopDownloadToken(local.fileName),
+      fileName: local.fileName,
+    };
+  }
+
+  @Get('desktop-download/file')
+  @Roles(Role.ADMIN)
+  @UseGuards(SettingsGateGuard)
+  downloadDesktopFile(@Query('token') token: string, @Res() res: Response) {
+    const checked = verifyDesktopDownloadToken(token);
+    if (!checked.ok) throw new BadRequestException('رابط التحميل منتهي أو غير صالح');
+    const file = this.service.readDesktopInstaller(checked.fileName);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}"`);
+    return res.send(file.data);
   }
 }
