@@ -13,12 +13,13 @@ import { CashModule } from './cash/cash.module';
 import { SalesModule } from './sales/sales.module';
 import { PurchasesModule } from './purchases/purchases.module';
 import { ReturnsModule } from './returns/returns.module';
+import { ScrapModule } from './scrap/scrap.module';
+import { OldBatteriesModule } from './oldbatteries/oldbatteries.module';
 import { ReportsModule } from './reports/reports.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { SettingsModule } from './settings/settings.module';
 import { StockModule } from './stock/stock.module';
 import { FinanceModule } from './finance/finance.module';
-import { DocumentsModule } from './documents/documents.module';
 import { OpsModule } from './ops/ops.module';
 import { OrgModule } from './org/org.module';
 import { WorkModule } from './work/work.module';
@@ -39,11 +40,12 @@ import { HealthController } from './health.controller';
     SalesModule,
     PurchasesModule,
     ReturnsModule,
+    OldBatteriesModule,
+    ScrapModule,
     ReportsModule,
     DashboardModule,
     SettingsModule,
     FinanceModule,
-    DocumentsModule,
     OpsModule,
     OrgModule,
     WorkModule,

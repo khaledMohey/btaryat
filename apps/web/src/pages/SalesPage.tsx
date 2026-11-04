@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Printer, Eye, ShoppingCart, Receipt, Trash2, Pencil } from 'lucide-react';
+import { Printer, Eye, ShoppingCart, Receipt, Trash2, Pencil, Scale } from 'lucide-react';
+import { ScrapSalesModal } from '../components/ScrapSalesModal';
 import { loadExcel } from '../lib/excel';
 import { api, formatDate, formatMoney, initialQuery, productImageUrl } from '../lib/api';
 import { DueAmount } from '../components/DueAmount';
@@ -8,6 +9,7 @@ import { ProductPicker } from '../components/ProductPicker';
 import { productsForWarehouse } from '../lib/productWarehouse';
 import { TenderEditor, type PayMethodOption, type TenderPart } from '../components/TenderEditor';
 import { useConfirm, usePrompt, useToast } from '../lib/feedback';
+import { useAccess } from '../lib/auth';
 import { useColumns } from '../lib/columns';
 import { IconAction, ListBar } from '../components/ListBar';
 import {
@@ -42,11 +44,32 @@ type Invoice = {
   subtotal: number;
   notes?: string | null;
   taxRate?: number;
+  hasScrap?: boolean;
+  scrapKg?: number;
+  scrapPieces?: number;
+  scrapPriceKg?: number;
+  scrapAmount?: number;
+  scrapKind?: string;
   customer: { id: string; name: string };
   warehouse: { id: string; name: string };
-  lines: { id: string; productId: string; quantity: number; unitPrice: number; discount?: number; total: number; product: { name: string; sku: string } }[];
+  lines: { id: string; productId: string; quantity: number; unitPrice: number; unitCost?: number; discount?: number; total: number; product: { name: string; sku: string } }[];
   receipts?: { id: string; number: string; amount: number; paymentMethod: string; receivedAt: string; note?: string | null }[];
 };
+
+type CostPreview = {
+  unitCost?: number;
+  totalCost?: number;
+  shortage: number;
+  allocations: { quantity: number; unitCost?: number; reference: string | null; supplierName: string | null; fallback?: boolean }[];
+};
+
+/** ربح الفاتورة = (البنود − الخصم + قيمة الخردة المستلمة) − تكلفة البضاعة بالـ FIFO */
+function invoiceProfit(inv: Invoice) {
+  if (inv.lines.some((l) => l.unitCost === undefined)) return null;
+  const cost = inv.lines.reduce((s, l) => s + l.quantity * (l.unitCost || 0), 0);
+  const revenue = inv.subtotal - inv.discount + (inv.scrapAmount || 0);
+  return { revenue, cost, profit: Math.round((revenue - cost) * 100) / 100 };
+}
 
 const emptyLine = (): Line => ({ productId: '', quantity: '', unitPrice: '', discount: '' });
 const emptyPart = (): TenderPart => ({ methodId: '', amount: '' });
@@ -118,6 +141,29 @@ export function SalesPage() {
   const [methods, setMethods] = useState<PayMethodOption[]>([]);
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<Invoice | null>(null);
+  const [scrapOpen, setScrapOpen] = useState(false);
+  const access = useAccess();
+  const canSeeCost = access.see('sales', 'cost');
+  const canSeeProfit = access.see('sales', 'profit');
+  const [costPreview, setCostPreview] = useState<Record<number, CostPreview>>({});
+  const [saleFifo, setSaleFifo] = useState<{
+    lines: {
+      lineId: string;
+      name: string;
+      quantity: number;
+      unitPrice: number;
+      total?: number;
+      unitCost: number;
+      allocations: { quantity: number; unitCost: number; reference: string | null; viaTransfer: string | null; supplierName: string | null; fallback?: boolean }[];
+    }[];
+  } | null>(null);
+  useEffect(() => {
+    if (!view || view.status === 'DRAFT') {
+      setSaleFifo(null);
+      return;
+    }
+    api<NonNullable<typeof saleFifo>>(`/sales/${view.id}/fifo`).then(setSaleFifo).catch(() => setSaleFifo(null));
+  }, [view?.id, view?.status]);
   const [search, setSearch] = useState(initialQuery);
   const [status, setStatus] = useState<SaleFilter>('all');
   const [listView, setListView] = useState<'table' | 'cards'>(() => (localStorage.getItem(SALE_VIEW) === 'cards' ? 'cards' : 'table'));
@@ -131,6 +177,11 @@ export function SalesPage() {
     payments: [emptyPart()] as TenderPart[],
     notes: '',
     confirm: true,
+    hasScrap: false,
+    scrapKind: 'SCRAP' as 'SCRAP' | 'WARRANTY_SWAP',
+    scrapKg: '' as number | '',
+    scrapPieces: '' as number | '',
+    scrapPriceKg: '' as number | '',
   });
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   const [posOpen, setPosOpen] = useState(false);
@@ -287,6 +338,7 @@ export function SalesPage() {
     { id: 'paid', label: 'المدفوع' },
     { id: 'due', label: 'المتبقي' },
     { id: 'status', label: 'الحالة' },
+    ...(canSeeProfit ? [{ id: 'profit', label: 'الربح' }] : []),
   ]);
 
   useEffect(() => {
@@ -328,20 +380,50 @@ export function SalesPage() {
     }, 30);
   }
 
+  const previewKey = lines.map((l) => `${l.productId}:${num(l.quantity)}`).join(',');
+  useEffect(() => {
+    if (!open || !canSeeCost || !form.warehouseId || !lines.some((l) => l.productId && num(l.quantity) > 0)) {
+      setCostPreview({});
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams({ warehouseId: form.warehouseId, lines: previewKey });
+      if (editingId) params.set('excludeInvoiceId', editingId);
+      api<CostPreview[]>(`/sales/fifo-preview?${params}`)
+        .then((rows) => {
+          const map: Record<number, CostPreview> = {};
+          rows.forEach((row, i) => { map[i] = row; });
+          setCostPreview(map);
+        })
+        .catch(() => setCostPreview({}));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [open, canSeeCost, form.warehouseId, previewKey, editingId]);
+
   const linesTotal = lines.reduce((s, l) => s + num(l.quantity) * num(l.unitPrice) - num(l.discount), 0);
   const taxAmount = Math.round((linesTotal - num(form.discount)) * num(form.tax) * 100) / 10000;
+  const scrapAmount = form.hasScrap ? Math.round(num(form.scrapKg) * num(form.scrapPriceKg) * 100) / 100 : 0;
+  // المطلوب من العميل فلوس — الخردة بتتسلّم عيني وبتدخل في الإيراد والربح بس
   const grand = linesTotal - num(form.discount) + taxAmount;
+  const costKnown = canSeeCost && lines.some((l, i) => l.productId && costPreview[i]?.unitCost !== undefined);
+  const formCost = lines.reduce((s, l, i) => s + (l.productId ? costPreview[i]?.totalCost || 0 : 0), 0);
+  const formRevenue = linesTotal - num(form.discount) + scrapAmount;
+  const formProfit = Math.round((formRevenue - formCost) * 100) / 100;
   const paidNow = form.payments.reduce((sum, part) => sum + num(part.amount), 0);
   const remaining = Math.max(0, grand - paidNow);
   const filledLines = lines.filter((l) => l.productId);
   const badLine = (l: Line) => !!l.productId && !(num(l.quantity) > 0);
   const overStock = lines.some((l) => l.productId && num(l.quantity) > availableQty(l.productId, form.warehouseId) + 0.0001);
+  const showScrapSection = !!form.warehouseId && form.customerName.trim().length >= 2;
   const formErrors = [
     form.customerName.trim().length < 2 && 'اكتب اسم العميل',
     !form.warehouseId && 'اختر المخزن',
     !filledLines.length && 'أضف صنفًا واحدًا على الأقل',
     lines.some(badLine) && 'كل بند لازم يكون له كمية أكبر من صفر',
     overStock && 'الكمية أكبر من المتاح في المخزن',
+    form.hasScrap && !(num(form.scrapPieces) >= 1) && 'أدخل عدد البطاريات القديمة',
+    form.hasScrap && form.scrapKind === 'SCRAP' && !(num(form.scrapKg) > 0) && 'أدخل وزن الخردة بالكيلو',
+    form.hasScrap && form.scrapKind === 'SCRAP' && !(num(form.scrapPriceKg) > 0) && 'أدخل سعر كيلو الخردة',
     paidNow > grand + 0.009 && 'المدفوع أكبر من إجمالي الفاتورة',
     form.confirm && form.payments.some((part) => num(part.amount) > 0 && !part.methodId) && 'اختر طريقة الدفع لكل جزء',
   ].filter(Boolean) as string[];
@@ -423,6 +505,11 @@ export function SalesPage() {
       notes: form.notes || undefined,
       confirm: form.confirm,
       shiftId: useShift && shift ? shift.id : undefined,
+      hasScrap: form.hasScrap,
+      scrapKind: form.hasScrap ? form.scrapKind : 'SCRAP',
+      scrapKg: form.hasScrap ? num(form.scrapKg) : 0,
+      scrapPieces: form.hasScrap ? num(form.scrapPieces) : 0,
+      scrapPriceKg: form.hasScrap ? num(form.scrapPriceKg) : 0,
       lines: lines.filter((l) => l.productId).map((l) => ({
         id: l.id,
         productId: l.productId,
@@ -444,6 +531,7 @@ export function SalesPage() {
       setTriedSave(false);
       setForm({
         customerName: WALK_IN_NAME, warehouseId: '', discount: '', tax: '', payments: [emptyPart()], notes: '', confirm: true,
+        hasScrap: false, scrapKind: 'SCRAP', scrapKg: '', scrapPieces: '', scrapPriceKg: '',
       });
       setLines([emptyLine()]);
       setEditCredit(null);
@@ -497,6 +585,11 @@ export function SalesPage() {
         : [emptyPart()],
       notes: inv.notes || '',
       confirm: true,
+      hasScrap: !!inv.hasScrap,
+      scrapKind: inv.scrapKind === 'WARRANTY_SWAP' ? 'WARRANTY_SWAP' : 'SCRAP',
+      scrapKg: inv.hasScrap ? (inv.scrapKg || '') : '',
+      scrapPieces: inv.hasScrap ? (inv.scrapPieces || '') : '',
+      scrapPriceKg: inv.hasScrap ? (inv.scrapPriceKg || '') : '',
     });
     setLines(inv.lines.map((l) => ({
       id: l.id,
@@ -631,7 +724,18 @@ export function SalesPage() {
     setTriedSave(false);
     setEditCredit(null);
     setForm({
-      customerName: WALK_IN_NAME, warehouseId: warehouses.length === 1 ? warehouses[0].id : '', discount: '', tax: '', payments: [emptyPart()], notes: '', confirm: true,
+      customerName: WALK_IN_NAME,
+      warehouseId: warehouses.length === 1 ? warehouses[0].id : '',
+      discount: '',
+      tax: '',
+      payments: [emptyPart()],
+      notes: '',
+      confirm: true,
+      hasScrap: false,
+      scrapKind: 'SCRAP',
+      scrapKg: '',
+      scrapPieces: '',
+      scrapPriceKg: '',
     });
     setLines([emptyLine()]);
     setOpen(true);
@@ -658,7 +762,12 @@ export function SalesPage() {
 
   return (
     <div>
-      <PageHeader title="المبيعات" subtitle="نقطة البيع وفواتير العملاء والتحصيل" />
+      <PageHeader
+        title="المبيعات"
+        subtitle="نقطة البيع وفواتير العملاء والتحصيل"
+        actions={<Button variant="secondary" onClick={() => setScrapOpen(true)}><Scale size={16} /> بيع خردة لمورد</Button>}
+      />
+      <ScrapSalesModal open={scrapOpen} onClose={() => setScrapOpen(false)} />
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {([
@@ -781,6 +890,7 @@ export function SalesPage() {
           <Table>
             <thead>
               <tr>
+                {canSeeProfit && saleColumns.visible('profit') && <Th>الربح</Th>}
                 {saleColumns.visible('status') && <Th>الحالة</Th>}
                 {saleColumns.visible('due') && <Th>المتبقي</Th>}
                 {saleColumns.visible('paid') && <Th>المدفوع</Th>}
@@ -795,6 +905,10 @@ export function SalesPage() {
             <tbody>
               {items.map((inv) => (
                 <tr key={inv.id} className={`status-${inv.status}`}>
+                  {canSeeProfit && saleColumns.visible('profit') && (() => {
+                    const p = inv.status === 'DRAFT' || inv.status === 'CANCELLED' ? null : invoiceProfit(inv);
+                    return <Td className={`font-bold ${p && p.profit < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{p ? formatMoney(p.profit) : '—'}</Td>;
+                  })()}
                   {saleColumns.visible('status') && <Td><StatusBadge status={inv.status} /></Td>}
                   {saleColumns.visible('due') && <Td><DueAmount date={inv.invoiceDate} remaining={owed(inv)} /></Td>}
                   {saleColumns.visible('paid') && <Td>{formatMoney(inv.paidAmount)}</Td>}
@@ -865,13 +979,29 @@ export function SalesPage() {
               <SummaryRow label={`البنود (${filledLines.length})`} value={formatMoney(linesTotal)} />
               <SummaryRow label="خصم الفاتورة" value={formatMoney(num(form.discount))} />
               <SummaryRow label={`الضريبة (${num(form.tax)}%)`} value={formatMoney(taxAmount)} />
-              <SummaryRow label="الإجمالي" value={formatMoney(grand)} strong />
+              <SummaryRow label="المطلوب من العميل" value={formatMoney(grand)} strong />
               <SummaryRow label="المدفوع" value={formatMoney(paidNow)} />
               <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2 font-bold text-slate-900">
                 <span>المتبقي</span>
                 <DueAmount date={formDueDate} remaining={remaining} />
               </div>
             </div>
+            {(costKnown || (form.hasScrap && scrapAmount > 0)) && (
+              <div className="space-y-1.5 rounded-2xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-sm">
+                <div className="flex justify-between"><span>البنود بعد الخصم</span><b>{formatMoney(linesTotal - num(form.discount))}</b></div>
+                {form.hasScrap && scrapAmount > 0 && (
+                  <div className="flex justify-between"><span>+ خردة مستلمة من العميل</span><b>{formatMoney(scrapAmount)}</b></div>
+                )}
+                <div className="flex justify-between border-t border-emerald-200 pt-1.5"><span>إيراد الفاتورة</span><b>{formatMoney(formRevenue)}</b></div>
+                {costKnown && <div className="flex justify-between"><span>− تكلفة البضاعة (FIFO)</span><b>{formatMoney(formCost)}</b></div>}
+                {costKnown && canSeeProfit && (
+                  <div className={`flex justify-between rounded-xl px-3 py-2 text-base font-extrabold ${formProfit >= 0 ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'}`}>
+                    <span>ربح الفاتورة</span>
+                    <span>{formatMoney(formProfit)}</span>
+                  </div>
+                )}
+              </div>
+            )}
             <label className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-sm">
               <input type="checkbox" checked={form.confirm} onChange={(e) => setForm({ ...form, confirm: e.target.checked })} />
               تأكيد فوري (خصم المخزون وتحديث رصيد العميل)
@@ -908,7 +1038,62 @@ export function SalesPage() {
               {selectedCustomer?.priceList === 'WHOLESALE' && <p className="mt-1 text-xs font-semibold text-brand-700">عميل جملة: الأسعار من قائمة الجملة</p>}
             </div>
           </div>
+          {showScrapSection && (
+            <label className="mt-4 flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-800">
+              <input
+                type="checkbox"
+                checked={form.hasScrap}
+                onChange={(e) => setForm({
+                  ...form,
+                  hasScrap: e.target.checked,
+                  ...(e.target.checked ? { scrapPieces: form.scrapPieces || 1 } : { scrapKg: '', scrapPieces: '', scrapPriceKg: '', scrapKind: 'SCRAP' as const }),
+                })}
+              />
+              العميل هيسلّم بطارية قديمة؟ (خردة أو ضمان)
+            </label>
+          )}
         </EditorSection>
+
+        {showScrapSection && form.hasScrap && (
+          <EditorSection title="بطارية قديمة من العميل">
+            <div className="mb-3 flex rounded-xl bg-slate-100 p-1">
+              {([['SCRAP', 'خردة (العميل باعها)'], ['WARRANTY_SWAP', 'ضمان — العميل دفع فرق وخد جديدة']] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setForm({ ...form, scrapKind: key })}
+                  className={`h-9 flex-1 rounded-lg px-3 text-xs font-bold transition ${form.scrapKind === key ? 'bg-white text-brand-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="mb-3 text-xs text-muted">
+              البطارية بتبقى ملك المحل وبتظهر في "فرز البطاريات القديمة" عشان تقرر: خردة، مستعمل، سيرفس، ولا مرتجع ضمان للمورد.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-4">
+              <div>
+                <Label>عدد البطاريات</Label>
+                <NumberInput value={form.scrapPieces} onValueChange={(v) => setForm({ ...form, scrapPieces: v })} />
+              </div>
+              <div>
+                <Label>الوزن (كيلو){form.scrapKind === 'WARRANTY_SWAP' ? ' — اختياري' : ''}</Label>
+                <NumberInput value={form.scrapKg} onValueChange={(v) => setForm({ ...form, scrapKg: v })} />
+              </div>
+              <div>
+                <Label>سعر الكيلو</Label>
+                <NumberInput value={form.scrapPriceKg} onValueChange={(v) => setForm({ ...form, scrapPriceKg: v })} />
+              </div>
+              <div>
+                <Label>قيمة الخردة</Label>
+                <div className="flex h-10 items-center rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-extrabold text-slate-900">
+                  {formatMoney(scrapAmount)}
+                </div>
+                <p className="mt-1 text-xs text-muted">الوزن × سعر الكيلو — بتدخل في إيراد وربح الفاتورة، ومش بتتضاف على المطلوب من العميل</p>
+              </div>
+            </div>
+          </EditorSection>
+        )}
 
         <EditorSection title={`بنود الفاتورة (${filledLines.length})`} action={<AddLineButton onClick={() => setLines((prev) => [...prev, emptyLine()])} />}>
           <div className="space-y-2">
@@ -959,6 +1144,41 @@ export function SalesPage() {
                     <NumberInput value={l.discount} onValueChange={(v) => updateLine(i, { discount: v })} />
                   </div>
                 </div>
+                {canSeeCost && l.productId && num(l.quantity) > 0 && costPreview[i]?.unitCost !== undefined && (() => {
+                  const cp = costPreview[i];
+                  const lineTotal = num(l.quantity) * num(l.unitPrice) - num(l.discount);
+                  const lineProfit = Math.round((lineTotal - (cp.totalCost || 0)) * 100) / 100;
+                  const belowCost = num(l.unitPrice) > 0 && num(l.unitPrice) < (cp.unitCost || 0);
+                  return (
+                    <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span>
+                          البطارية واقفة عليك بـ <b className="text-sm">{formatMoney(cp.unitCost || 0)}</b>
+                          {' · '}تكلفة البند <b>{formatMoney(cp.totalCost || 0)}</b>
+                        </span>
+                        {canSeeProfit && (
+                          <span className={`font-extrabold ${lineProfit >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                            ربح البند {formatMoney(lineProfit)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {cp.allocations.map((a, k) => (
+                          <span key={k} className={`rounded-md px-1.5 py-0.5 ring-1 ${a.fallback ? 'bg-amber-50 text-amber-800 ring-amber-200' : 'bg-white text-slate-600 ring-slate-200'}`}>
+                            {a.quantity} × {formatMoney(a.unitCost || 0)}
+                            {a.fallback ? ' (رصيد بدون دفعة)' : <> من <bdi dir="ltr" className="font-mono">{a.reference}</bdi></>}
+                            {a.supplierName && ` · ${a.supplierName}`}
+                          </span>
+                        ))}
+                      </div>
+                      {belowCost && (
+                        <div className="mt-1 text-amber-700">
+                          سعر البيع أقل من التكلفة{form.hasScrap && scrapAmount > 0 ? ' — الخردة المستلمة بتعوّض الفرق في ربح الفاتورة' : ''}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </LineCard>
             ))}
           </div>
@@ -1116,8 +1336,51 @@ export function SalesPage() {
                     <Td>{formatMoney(l.total)}</Td>
                   </tr>
                 ))}
+                {view.hasScrap && (view.scrapAmount || 0) > 0 && (
+                  <tr>
+                    <Td>
+                      بطارية خردة مستلمة من العميل
+                      <div className="text-xs text-muted">
+                        {(view.scrapPieces || 0) > 0 ? `${view.scrapPieces} قطعة · ` : ''}
+                        {view.scrapKg || 0} كيلو × {formatMoney(view.scrapPriceKg || 0)}
+                      </div>
+                    </Td>
+                    <Td>{view.scrapKg || 0}</Td>
+                    <Td>{formatMoney(view.scrapPriceKg || 0)}</Td>
+                    <Td>{formatMoney(view.scrapAmount || 0)}</Td>
+                  </tr>
+                )}
               </tbody>
             </Table>
+            {saleFifo && saleFifo.lines.some((l) => l.allocations.length > 0) && (
+              <div className="mt-4 rounded-xl border border-slate-200 p-3 no-print">
+                <div className="mb-2 text-sm font-bold text-slate-800">مسحوب من أنهي دفعة (FIFO)</div>
+                <div className="space-y-2">
+                  {saleFifo.lines.map((line) => (
+                    <div key={line.lineId} className="rounded-lg bg-slate-50 p-2 text-sm">
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <span className="font-bold">{line.name} · {line.quantity}</span>
+                        <span className="text-xs text-muted">
+                          تكلفة الوحدة {formatMoney(line.unitCost)} · ربح البند {formatMoney((line.total ?? line.unitPrice * line.quantity) - line.unitCost * line.quantity)}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {line.allocations.map((a, i) => (
+                          <span key={i} className={`rounded-lg px-2 py-1 text-xs ring-1 ${a.fallback ? 'bg-amber-50 text-amber-800 ring-amber-200' : 'bg-white text-slate-700 ring-slate-200'}`}>
+                            <b>{a.quantity}</b> من {a.fallback ? 'رصيد بدون دفعة' : (
+                              <>دفعة <bdi dir="ltr" className="font-mono font-bold">{a.reference || '—'}</bdi></>
+                            )}
+                            {a.supplierName && <> · {a.supplierName}</>}
+                            {a.viaTransfer && <> · محوّلة <bdi dir="ltr">{a.viaTransfer}</bdi></>}
+                            {' · '}بسعر <b>{formatMoney(a.unitCost)}</b>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="mt-4 space-y-1 text-sm">
               <div className="flex justify-between"><span>المجموع</span><span>{formatMoney(view.subtotal)}</span></div>
               {view.discount > 0 && <div className="flex justify-between text-amber-700"><span>الخصم</span><span>{formatMoney(view.discount)}</span></div>}
@@ -1128,10 +1391,28 @@ export function SalesPage() {
                 {view.status === 'CANCELLED' ? <span>{formatMoney(0)}</span> : <DueAmount date={view.invoiceDate} remaining={view.total - view.paidAmount} />}
               </div>
               <div className="flex justify-between text-lg font-extrabold">
-                <span>الإجمالي</span>
+                <span>المطلوب من العميل</span>
                 <span>{formatMoney(view.total)}</span>
               </div>
             </div>
+            {(() => {
+              const p = invoiceProfit(view);
+              if (!p || !canSeeProfit) return null;
+              return (
+                <div className="mt-4 space-y-1.5 rounded-2xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-sm no-print">
+                  <div className="flex justify-between"><span>البنود بعد الخصم</span><b>{formatMoney(view.subtotal - view.discount)}</b></div>
+                  {(view.scrapAmount || 0) > 0 && (
+                    <div className="flex justify-between"><span>+ خردة مستلمة من العميل</span><b>{formatMoney(view.scrapAmount || 0)}</b></div>
+                  )}
+                  <div className="flex justify-between border-t border-emerald-200 pt-1.5"><span>إيراد الفاتورة</span><b>{formatMoney(p.revenue)}</b></div>
+                  <div className="flex justify-between"><span>− تكلفة البضاعة (FIFO)</span><b>{formatMoney(p.cost)}</b></div>
+                  <div className={`flex justify-between rounded-xl px-3 py-2 text-base font-extrabold text-white ${p.profit >= 0 ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+                    <span>ربح الفاتورة</span>
+                    <span>{formatMoney(p.profit)}</span>
+                  </div>
+                </div>
+              );
+            })()}
             <div className="mt-4">
               <div className="mb-2 text-sm font-semibold text-slate-700">حركات التحصيل</div>
               {!view.receipts?.length ? (

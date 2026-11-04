@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plus, Printer, Eye, Trash2, Pencil, ShoppingBag } from 'lucide-react';
+import { Plus, Printer, Eye, Trash2, Pencil, ShoppingBag, Scale } from 'lucide-react';
+import { ScrapSalesModal, scrapNumbers, WaterToggle } from '../components/ScrapSalesModal';
 import { loadExcel } from '../lib/excel';
 import { api, formatDate, formatMoney, initialQuery } from '../lib/api';
 import { DueAmount } from '../components/DueAmount';
@@ -51,12 +52,15 @@ type Invoice = {
     product: { name: string; sku: string };
   }[];
   payments?: { id: string; paymentMethod: string; amount: number }[];
+  scrapAmount?: number;
+  scrapSale?: { id: string; number: string; withWater: boolean; waterPercent: number; grossKg: number; netKg: number; priceKg: number; amount: number; notes?: string | null } | null;
 };
 
 const emptyLine = (): Line => ({
   productId: '', quantity: '', unitCost: '', discount: '', batchNumber: '', expiryDate: '',
 });
 const num = (v: number | '') => (v === '' ? 0 : v);
+const emptyScrap = () => ({ on: false, withWater: false, grossKg: '' as number | '', priceKg: '' as number | '', notes: '' });
 const PURCHASE_VIEW = 'm5azen.purchasesView';
 type PurchaseFilter = 'all' | 'DRAFT' | 'CONFIRMED' | 'PARTIAL' | 'PAID' | 'CANCELLED' | 'due';
 const PURCHASE_FILTERS: { id: PurchaseFilter; label: string }[] = [
@@ -102,6 +106,8 @@ export function PurchasesPage() {
     confirm: true,
   });
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
+  const [scrap, setScrap] = useState(emptyScrap);
+  const [scrapListOpen, setScrapListOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [triedSave, setTriedSave] = useState(false);
@@ -191,7 +197,9 @@ export function PurchasesPage() {
   const afterDiscount = linesTotal - num(form.discount);
   const taxPercent = num(form.tax);
   const taxAmount = Math.round(afterDiscount * taxPercent * 100) / 10000;
-  const grand = afterDiscount + taxAmount;
+  const scrapCalc = scrap.on ? scrapNumbers(num(scrap.grossKg), num(scrap.priceKg), scrap.withWater) : { netKg: 0, amount: 0 };
+  const grossTotal = afterDiscount + taxAmount;
+  const grand = Math.round((grossTotal - scrapCalc.amount) * 100) / 100;
   const paidNow = form.payments.reduce((sum, part) => sum + num(part.amount), 0);
   const remaining = Math.max(0, grand - paidNow);
   const filledLines = lines.filter((l) => l.productId);
@@ -202,6 +210,9 @@ export function PurchasesPage() {
     !filledLines.length && 'أضف صنفًا واحدًا على الأقل',
     lines.some(badLine) && 'كل بند لازم يكون له كمية أكبر من صفر',
     paidNow > grand + 0.009 && 'المدفوع أكبر من إجمالي الفاتورة',
+    scrap.on && !(num(scrap.grossKg) > 0) && 'أدخل وزن الخردة',
+    scrap.on && !(num(scrap.priceKg) > 0) && 'أدخل سعر كيلو الخردة',
+    scrap.on && grand < -0.009 && 'قيمة الخردة أكبر من الفاتورة — سجّلها كبيع خردة منفصل',
     form.confirm && form.payments.some((part) => num(part.amount) > 0 && !part.methodId) && 'اختر طريقة الدفع لكل جزء',
   ].filter(Boolean) as string[];
 
@@ -221,6 +232,9 @@ export function PurchasesPage() {
           tax: taxPercent,
           notes: form.notes || undefined,
           confirm: form.confirm,
+          scrap: scrap.on
+            ? { withWater: scrap.withWater, grossKg: num(scrap.grossKg), priceKg: num(scrap.priceKg), notes: scrap.notes || undefined }
+            : null,
           payments: form.payments.filter((part) => num(part.amount) > 0).map((part) => ({ id: part.id, methodId: part.methodId, amount: num(part.amount) })),
           lines: filledLines.map((l) => ({
             id: l.id,
@@ -242,6 +256,7 @@ export function PurchasesPage() {
         supplierId: '', warehouseId: '', discount: '', tax: '', payments: [emptyPart()], notes: '', confirm: true,
       });
       setLines([emptyLine()]);
+      setScrap(emptyScrap());
       load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'تعذر حفظ الفاتورة');
@@ -278,6 +293,9 @@ export function PurchasesPage() {
       batchNumber: l.batchNumber || '',
       expiryDate: l.expiryDate ? l.expiryDate.slice(0, 10) : '',
     })));
+    setScrap(inv.scrapSale
+      ? { on: true, withWater: inv.scrapSale.withWater, grossKg: inv.scrapSale.grossKg, priceKg: inv.scrapSale.priceKg, notes: inv.scrapSale.notes || '' }
+      : emptyScrap());
     setView(null);
     setOpen(true);
   }
@@ -307,6 +325,7 @@ export function PurchasesPage() {
       supplierId: '', warehouseId: warehouses.length === 1 ? warehouses[0].id : '', discount: '', tax: '', payments: [emptyPart()], notes: '', confirm: true,
     });
     setLines([emptyLine()]);
+    setScrap(emptyScrap());
     setOpen(true);
   }
 
@@ -334,8 +353,14 @@ export function PurchasesPage() {
       <PageHeader
         title="المشتريات"
         subtitle="فواتير الموردين ودخول المخزون"
-        actions={<Button onClick={openInvoiceForm}><Plus size={16} /> فاتورة شراء</Button>}
+        actions={(
+          <>
+            <Button variant="secondary" onClick={() => setScrapListOpen(true)}><Scale size={16} /> بيع خردة لمورد</Button>
+            <Button onClick={openInvoiceForm}><Plus size={16} /> فاتورة شراء</Button>
+          </>
+        )}
       />
+      <ScrapSalesModal open={scrapListOpen} onClose={() => setScrapListOpen(false)} onChanged={() => load()} />
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {([
           { key: 'all' as const, label: 'فواتير الشراء', value: String(stats.count), hint: 'كل الحالات', stripe: 'bg-brand-700' },
@@ -475,6 +500,35 @@ export function PurchasesPage() {
                 <NumberInput value={form.tax} onValueChange={(v) => setForm({ ...form, tax: v })} />
               </div>
             </div>
+            <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-3">
+              <label className="flex items-center gap-2 text-sm font-bold text-amber-900">
+                <input
+                  type="checkbox"
+                  checked={scrap.on}
+                  onChange={(e) => setScrap(e.target.checked ? { ...scrap, on: true } : emptyScrap())}
+                />
+                بيع خردة للمورد ده وخصمها من الفاتورة
+              </label>
+              {scrap.on && (
+                <div className="mt-2 space-y-2">
+                  <WaterToggle value={scrap.withWater} onChange={(withWater) => setScrap({ ...scrap, withWater })} />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label>الوزن (كجم)</Label>
+                      <NumberInput value={scrap.grossKg} onValueChange={(v) => setScrap({ ...scrap, grossKg: v })} />
+                    </div>
+                    <div>
+                      <Label>سعر الكيلو</Label>
+                      <NumberInput value={scrap.priceKg} onValueChange={(v) => setScrap({ ...scrap, priceKg: v })} />
+                    </div>
+                  </div>
+                  <div className="flex justify-between text-xs text-amber-900">
+                    <span>الصافي {scrapCalc.netKg} كجم{scrap.withWater ? ' (بعد خصم المياه)' : ''}</span>
+                    <b>{formatMoney(scrapCalc.amount)}</b>
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="flex items-center justify-between gap-2">
               <Label>المدفوع الآن</Label>
               <button
@@ -500,6 +554,7 @@ export function PurchasesPage() {
               <SummaryRow label={`البنود (${filledLines.length})`} value={formatMoney(linesTotal)} />
               <SummaryRow label="خصم الفاتورة" value={formatMoney(num(form.discount))} />
               <SummaryRow label={`الضريبة (${taxPercent}%)`} value={formatMoney(taxAmount)} />
+              {scrapCalc.amount > 0 && <SummaryRow label="خردة مخصومة" value={`− ${formatMoney(scrapCalc.amount)}`} />}
               <SummaryRow label="الإجمالي" value={formatMoney(grand)} strong />
               <SummaryRow label="المدفوع" value={formatMoney(paidNow)} />
               <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2 font-bold text-slate-900">
@@ -646,6 +701,16 @@ export function PurchasesPage() {
               </tbody>
             </Table>
             <div className="mt-4 space-y-1 text-sm">
+              {view.scrapSale && (
+                <div className="flex justify-between rounded-lg bg-amber-50 px-2 py-1 text-amber-900">
+                  <span>
+                    خردة مخصومة {view.scrapSale.number} · {view.scrapSale.netKg} كجم
+                    {view.scrapSale.withWater ? ` (قائم ${view.scrapSale.grossKg} − ${view.scrapSale.waterPercent}% مياه)` : ''}
+                    {' × '}{formatMoney(view.scrapSale.priceKg)}
+                  </span>
+                  <span>− {formatMoney(view.scrapSale.amount)}</span>
+                </div>
+              )}
               <div className="flex justify-between"><span>المدفوع</span><span>{formatMoney(view.paidAmount)}</span></div>
               <div className="flex justify-between font-bold">
                 <span>المتبقي</span>

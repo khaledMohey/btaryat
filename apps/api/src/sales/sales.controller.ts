@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query, Req } from '@nestjs/common';
-import { IsArray, IsBoolean, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { InvoiceStatus, Role } from '@prisma/client';
 import { SalesService } from './sales.service';
@@ -32,6 +32,11 @@ class CreateSalesDto {
   @IsOptional() @IsString() shiftId?: string;
   @IsOptional() @IsString() notes?: string;
   @IsOptional() @IsNumber() paidAmount?: number;
+  @IsOptional() @IsBoolean() hasScrap?: boolean;
+  @IsOptional() @IsNumber() scrapKg?: number;
+  @IsOptional() @IsNumber() scrapPieces?: number;
+  @IsOptional() @IsNumber() scrapPriceKg?: number;
+  @IsOptional() @IsIn(['SCRAP', 'WARRANTY_SWAP']) scrapKind?: 'SCRAP' | 'WARRANTY_SWAP';
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => TenderDto) payments?: TenderDto[];
   @IsOptional() @IsBoolean() confirm?: boolean;
   @IsArray() @ValidateNested({ each: true }) @Type(() => LineDto)
@@ -67,6 +72,20 @@ export class SalesController {
   @Get('price-hints')
   priceHints(@Query('customerId') customerId?: string, @Query('excludeInvoiceId') excludeInvoiceId?: string) {
     return this.service.priceHints(customerId, excludeInvoiceId);
+  }
+
+  @Get('fifo-preview')
+  fifoPreview(
+    @Query('warehouseId') warehouseId: string,
+    @Query('lines') lines: string,
+    @Query('excludeInvoiceId') excludeInvoiceId?: string,
+  ) {
+    return this.service.fifoPreview({ warehouseId, lines, excludeInvoiceId });
+  }
+
+  @Get(':id/fifo')
+  fifo(@Param('id') id: string) {
+    return this.service.fifo(id);
   }
 
   @Get(':id')

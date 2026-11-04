@@ -24,7 +24,15 @@ class TenderDto {
   @IsOptional() @IsString() referenceNo?: string;
 }
 
+class ScrapDto {
+  @IsOptional() @IsBoolean() withWater?: boolean;
+  @IsOptional() @IsNumber() grossKg?: number;
+  @IsOptional() @IsNumber() priceKg?: number;
+  @IsOptional() @IsString() notes?: string;
+}
+
 class CreatePurchaseDto {
+  @IsOptional() @ValidateNested() @Type(() => ScrapDto) scrap?: ScrapDto | null;
   @IsString() supplierId!: string;
   @IsString() warehouseId!: string;
   @IsOptional() @IsString() invoiceDate?: string;

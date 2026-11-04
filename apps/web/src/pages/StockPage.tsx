@@ -41,6 +41,40 @@ type StockItem = {
   };
   warehouse: { id: string; name: string };
   batches: Batch[];
+  openLayers?: number;
+  nextCost?: number | null;
+};
+
+type FifoConsumed = { type: string; reference: string | null; date: string; quantity: number; partyName: string | null };
+type FifoLayerRow = {
+  key: string;
+  type: string;
+  reference: string | null;
+  viaTransfer: string | null;
+  partyName: string | null;
+  note: string | null;
+  date: string | null;
+  unitCost: number;
+  quantity: number;
+  remaining: number;
+  used: number;
+  consumed: FifoConsumed[];
+};
+type FifoDetail = {
+  remainingQty: number;
+  remainingValue: number;
+  avgCost: number;
+  nextCost: number | null;
+  layers: FifoLayerRow[];
+  fallbackOuts: { reference: string | null; type: string; date: string; quantity: number; unitCost: number; partyName: string | null }[];
+};
+
+const LAYER_LABELS: Record<string, string> = {
+  PURCHASE: 'فاتورة شراء',
+  SALE_RETURN: 'مرتجع بيع',
+  ADJUSTMENT: 'تسوية / استلام',
+  TRANSFER_IN: 'تحويل وارد',
+  OPENING: 'رصيد سابق',
 };
 
 type Movement = {
@@ -55,8 +89,8 @@ type Movement = {
   warehouse: { name: string };
 };
 
-type Warehouse = { id: string; name: string };
-type Product = { id: string; name: string; sku: string; barcode?: string | null; warehouses?: { warehouseId: string }[] };
+type Warehouse = { id: string; name: string; code?: string };
+type Product = { id: string; name: string; sku: string; unit?: string; barcode?: string | null; warehouses?: { warehouseId: string }[] };
 
 const MOV_LABELS: Record<string, string> = {
   PURCHASE: 'شراء',
@@ -92,11 +126,20 @@ export function StockPage() {
   const [lookupQ, setLookupQ] = useState('');
   const [lookupRows, setLookupRows] = useState<{ productId: string; warehouseId: string; quantity: number; sku: string; name: string; warehouseName: string }[]>([]);
   const [lookupBusy, setLookupBusy] = useState(false);
-  const [countForm, setCountForm] = useState({ warehouseId: '', productId: '', quantity: '' as number | '', note: '', mode: 'set' as 'set' | 'delta' });
+  const [countForm, setCountForm] = useState({
+    warehouseId: '',
+    productId: '',
+    quantity: '' as number | '',
+    unitCost: '' as number | '',
+    note: '',
+    mode: 'set' as 'set' | 'delta',
+  });
   const [expiryRows, setExpiryRows] = useState<{ name: string; sku: string; expiryDate: string; warehouseName: string; invoiceNumber: string; batchNumber?: string | null; expired: boolean; quantity: number }[]>([]);
   const [locations, setLocations] = useState<{ id: string; code: string; name: string }[]>([]);
   const [locForm, setLocForm] = useState({ warehouseId: '', code: '', name: '', productId: '', locationId: '' });
   const [detail, setDetail] = useState<StockItem | null>(null);
+  const [fifo, setFifo] = useState<FifoDetail | null>(null);
+  const [fifoLoading, setFifoLoading] = useState(false);
   const [editMov, setEditMov] = useState<Movement | null>(null);
   const [editBatch, setEditBatch] = useState<Batch | null>(null);
   const [movForm, setMovForm] = useState({
@@ -147,6 +190,18 @@ export function StockPage() {
   useEffect(() => {
     load();
   }, [warehouseId, search, movPage, movPageSize]);
+
+  useEffect(() => {
+    if (!detail) {
+      setFifo(null);
+      return;
+    }
+    setFifoLoading(true);
+    api<FifoDetail>(`/stock/fifo?productId=${detail.productId}&warehouseId=${detail.warehouseId}`)
+      .then(setFifo)
+      .catch(() => setFifo(null))
+      .finally(() => setFifoLoading(false));
+  }, [detail]);
 
   const visibleItems = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -273,7 +328,17 @@ export function StockPage() {
             <Button variant="secondary" onClick={() => { setLookupOpen(true); setLookupQ(''); setLookupRows([]); }}>
               <Search size={16} /> بحث في مخازن أخرى
             </Button>
-            <Button variant="secondary" onClick={() => { setCountForm({ ...countForm, mode: 'set' }); setCountOpen(true); }}>جرد / رصيد افتتاحي</Button>
+            <Button variant="secondary" onClick={() => {
+              setCountForm({
+                warehouseId: warehouseId || (warehouses.length === 1 ? warehouses[0].id : ''),
+                productId: '',
+                quantity: '',
+                unitCost: '',
+                note: '',
+                mode: 'set',
+              });
+              setCountOpen(true);
+            }}>جرد / رصيد افتتاحي</Button>
             <Button variant="secondary" onClick={async () => {
               setExpiryRows(await api('/stock/expiry?days=30'));
               setExpiryOpen(true);
@@ -355,7 +420,7 @@ export function StockPage() {
                     </Td>
                     <Td className="whitespace-nowrap text-slate-600">{formatMoney(b.unitCost)}</Td>
                     <Td className="whitespace-nowrap font-extrabold text-brand-800">{formatMoney(b.totalCost)}</Td>
-                    <Td><Badge tone="brand">{b.batches.length} دفعة</Badge></Td>
+                    <Td><Badge tone="brand">{b.openLayers ?? b.batches.length} دفعة متاحة</Badge></Td>
                     <Td className="no-print">
                       <Button variant="ghost" onClick={() => setDetail(b)}>
                         <Eye size={14} /> تفاصيل
@@ -429,10 +494,68 @@ export function StockPage() {
               <div>المخزن: <strong>{detail.warehouse.name}</strong></div>
               <div>الكود: <strong className="font-mono">{detail.product.sku}</strong></div>
               <div>الرصيد الحالي: <strong>{detail.quantity} {detail.product.unit}</strong></div>
-              <div>تكلفة الوحدة (آخر شراء): <strong>{formatMoney(detail.unitCost)}</strong></div>
-              <div className="sm:col-span-2 text-brand-800">
+              <div>متوسط تكلفة الرصيد (FIFO): <strong>{formatMoney(detail.unitCost)}</strong></div>
+              <div>البيع الجاي هيتسحب بتكلفة: <strong>{detail.nextCost != null ? formatMoney(detail.nextCost) : '—'}</strong></div>
+              <div className="text-brand-800">
                 إجمالي تكلفة الرصيد: <strong className="text-lg">{formatMoney(detail.totalCost)}</strong>
               </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 p-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-bold text-slate-800">دفعات FIFO — الأقدم بيتباع الأول</div>
+                {fifo && (
+                  <div className="text-xs text-muted">
+                    فاضل {fifo.remainingQty} {detail.product.unit} بقيمة {formatMoney(fifo.remainingValue)}
+                  </div>
+                )}
+              </div>
+              {fifoLoading && <div className="text-sm text-muted">جاري التحميل...</div>}
+              {!fifoLoading && fifo && fifo.layers.length === 0 && <Empty text="لا توجد دفعات مسجلة لهذا الصنف في المخزن ده" />}
+              {!fifoLoading && fifo && fifo.layers.length > 0 && (
+                <div className="space-y-2">
+                  {fifo.layers.map((layer, index) => (
+                    <div key={layer.key} className={`rounded-xl border p-3 ${layer.remaining > 0.0001 ? 'border-emerald-200 bg-emerald-50/40' : 'border-slate-200 bg-slate-50'}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge tone="slate">#{index + 1}</Badge>
+                          <Badge tone={layer.type === 'PURCHASE' ? 'brand' : 'sky'}>{LAYER_LABELS[layer.type] || layer.type}</Badge>
+                          {layer.reference && <span className="font-mono text-xs font-bold" dir="ltr">{layer.reference}</span>}
+                          {layer.viaTransfer && <span className="text-xs text-muted">محوّلة بـ <bdi dir="ltr">{layer.viaTransfer}</bdi></span>}
+                          {layer.partyName && <span className="text-xs text-slate-600">{layer.partyName}</span>}
+                          {layer.date && <span className="text-xs text-muted">{formatDate(layer.date)}</span>}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <span>دخل <b>{layer.quantity}</b></span>
+                          <span>بسعر <b>{formatMoney(layer.unitCost)}</b></span>
+                          <span className="text-rose-700">اتسحب <b>{layer.used}</b></span>
+                          <span className={layer.remaining > 0.0001 ? 'font-extrabold text-emerald-700' : 'text-muted'}>
+                            {layer.remaining > 0.0001 ? `فاضل ${layer.remaining}` : 'خلصت'}
+                          </span>
+                        </div>
+                      </div>
+                      {layer.consumed.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {layer.consumed.map((c, i) => (
+                            <span key={i} className="rounded-lg bg-white px-2 py-1 text-xs text-slate-700 ring-1 ring-slate-200">
+                              {MOV_LABELS[c.type] || (c.type === 'TRIM' ? 'فرق رصيد' : c.type)}
+                              {c.reference && <> <bdi dir="ltr" className="font-mono font-bold">{c.reference}</bdi></>}
+                              {c.partyName && <> · {c.partyName}</>}
+                              {' · '}<b>{c.quantity}</b>
+                              {' · '}{formatDate(c.date)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {fifo.fallbackOuts.length > 0 && (
+                    <div className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      فيه {fifo.fallbackOuts.reduce((s, o) => s + o.quantity, 0)} اتسحبت من غير دفعة مسجلة (رصيد قديم) واتحسبت بتكلفة الصنف الحالية.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {detail.product.fieldValues?.length > 0 && (
@@ -566,7 +689,7 @@ export function StockPage() {
           </div>
           <div>
             <Label>المخزن</Label>
-            <Select value={countForm.warehouseId} onChange={(e) => setCountForm({ ...countForm, warehouseId: e.target.value })}>
+            <Select value={countForm.warehouseId} onChange={(e) => setCountForm({ ...countForm, warehouseId: e.target.value, productId: '' })}>
               <option value="">اختر</option>
               {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
             </Select>
@@ -590,19 +713,56 @@ export function StockPage() {
             <Label>{countForm.mode === 'set' ? 'الكمية المعدودة' : 'الفرق'}</Label>
             <NumberInput value={countForm.quantity} onValueChange={(v) => setCountForm({ ...countForm, quantity: v })} />
           </div>
+          {(() => {
+            const selected = products.find((p) => p.id === countForm.productId);
+            const unitLabel = selected?.unit === 'كيلو' ? 'الكيلو' : 'القطعة';
+            const qty = countForm.quantity === '' ? 0 : countForm.quantity;
+            const cost = countForm.unitCost === '' ? 0 : countForm.unitCost;
+            const totalCost = Math.round(Math.abs(qty) * cost * 100) / 100;
+            return (
+              <>
+                <div>
+                  <Label>تكلفة {unitLabel}</Label>
+                  <NumberInput value={countForm.unitCost} onValueChange={(v) => setCountForm({ ...countForm, unitCost: v })} />
+                  <p className="mt-1 text-xs text-muted">تدخل تكلفة {unitLabel} عشان يتسجل رصيدك بتكلفة صحيحة</p>
+                </div>
+                {(qty !== 0 || cost !== 0) && (
+                  <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                    <div className="text-muted">إجمالي تكلفة الرصيد</div>
+                    <div className="font-extrabold text-slate-900">{formatMoney(totalCost)}</div>
+                    <div className="text-xs text-muted">{Math.abs(qty).toLocaleString('ar-EG')} × {formatMoney(cost)}</div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
           <div><Label>ملاحظة</Label><Input value={countForm.note} onChange={(e) => setCountForm({ ...countForm, note: e.target.value })} /></div>
           <Button className="w-full" onClick={async () => {
-            await api('/stock/adjustments', {
-              method: 'POST',
-              body: JSON.stringify({
-                warehouseId: countForm.warehouseId,
-                mode: countForm.mode,
-                note: countForm.note,
-                lines: [{ productId: countForm.productId, quantity: countForm.quantity === '' ? 0 : countForm.quantity }],
-              }),
-            });
-            setCountOpen(false);
-            load();
+            if (!countForm.warehouseId || !countForm.productId) {
+              toast.error('اختَر المخزن والصنف');
+              return;
+            }
+            try {
+              await api('/stock/adjustments', {
+                method: 'POST',
+                body: JSON.stringify({
+                  warehouseId: countForm.warehouseId,
+                  mode: countForm.mode,
+                  note: countForm.note,
+                  lines: [{
+                    productId: countForm.productId,
+                    quantity: countForm.quantity === '' ? 0 : countForm.quantity,
+                    unitCost: countForm.unitCost === '' ? undefined : countForm.unitCost,
+                  }],
+                }),
+              });
+              setCountOpen(false);
+              setCountForm({ warehouseId: '', productId: '', quantity: '', unitCost: '', note: '', mode: 'set' });
+              toast.success('تم حفظ الرصيد');
+              load();
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : 'تعذر حفظ الرصيد');
+            }
           }}>حفظ</Button>
         </div>
       </Modal>

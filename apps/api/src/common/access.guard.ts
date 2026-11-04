@@ -21,7 +21,6 @@ const RULES = [
   { prefix: '/api/cash', page: 'cash' },
   { prefix: '/api/finance', page: 'finance' },
   { prefix: '/api/returns', page: 'returns' },
-  { prefix: '/api/documents', page: 'documents' },
   { prefix: '/api/reports', page: 'reports' },
   { prefix: '/api/dashboard', page: 'dashboard' },
   { prefix: '/api/settings', page: 'settings' },
@@ -100,7 +99,7 @@ export class AccessGuard implements CanActivate {
       && !canDo(access, 'warehouses', 'view')
     ) {
       const neededBy = [
-        'sales', 'purchases', 'stock', 'returns', 'documents', 'products', 'reports', 'customers', 'suppliers',
+        'sales', 'purchases', 'stock', 'returns', 'products', 'reports', 'customers', 'suppliers',
       ] as const;
       if (neededBy.some((id) => canDo(access, id, 'view'))) {
         req.accessChecked = true;

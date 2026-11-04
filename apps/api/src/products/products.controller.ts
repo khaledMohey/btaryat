@@ -34,7 +34,7 @@ class UpdateProductFieldDto {
 }
 
 class ProductDto {
-  @IsString() sku!: string;
+  @IsOptional() @IsString() sku?: string;
   @IsString() name!: string;
   @IsOptional() @IsString() unit?: string;
   @IsOptional() @IsNumber() costPrice?: number;
@@ -44,6 +44,7 @@ class ProductDto {
   @IsOptional() @IsNumber() packSize?: number;
   @IsOptional() @IsString() barcode?: string;
   @IsOptional() @IsString() brand?: string;
+  @IsOptional() @IsString() batterySize?: string;
   @IsOptional() @IsString() categoryId?: string;
   @IsOptional() @IsString() packUnit?: string;
   @IsOptional() @IsString() description?: string;
@@ -63,6 +64,7 @@ class UpdateProductDto {
   @IsOptional() @IsNumber() packSize?: number;
   @IsOptional() @IsString() barcode?: string;
   @IsOptional() @IsString() brand?: string;
+  @IsOptional() @IsString() batterySize?: string;
   @IsOptional() @IsString() categoryId?: string;
   @IsOptional() @IsString() packUnit?: string;
   @IsOptional() @IsString() description?: string;
@@ -137,6 +139,11 @@ export class ProductsController {
   @Get('barcode/:code')
   barcode(@Param('code') code: string) {
     return this.service.findByBarcode(code);
+  }
+
+  @Get('next-sku')
+  async nextSku() {
+    return { sku: await this.service.nextSku() };
   }
 
   @Get()

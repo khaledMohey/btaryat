@@ -86,11 +86,11 @@ enum StockMovementType {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  username     String   @unique
+  id           String    @id @default(cuid())
+  username     String    @unique
   passwordHash String
   fullName     String
-  role         Role     @default(SALES)
+  role         Role      @default(SALES)
   permissions  String?
   isActive     Boolean   @default(true)
   lastLoginAt  DateTime?
@@ -118,21 +118,24 @@ model Warehouse {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  stockBalances    StockBalance[]
-  stockMovements   StockMovement[]
-  salesInvoices    SalesInvoice[]
-  purchaseInvoices PurchaseInvoice[]
-  salesReturns     SalesReturn[]
-  purchaseReturns  PurchaseReturn[]
-  transfersFrom    StockTransfer[] @relation("TransferFrom")
-  transfersTo      StockTransfer[] @relation("TransferTo")
-  locations         WarehouseLocation[]
-  productLocations  ProductLocation[]
-  productWarehouses ProductWarehouse[]
-  customerWarehouses CustomerWarehouse[]
-  supplierWarehouses SupplierWarehouse[]
-  userLinks         UserWarehouse[]
-  documents         TradeDocument[]
+  stockBalances          StockBalance[]
+  stockMovements         StockMovement[]
+  salesInvoices          SalesInvoice[]
+  purchaseInvoices       PurchaseInvoice[]
+  salesReturns           SalesReturn[]
+  purchaseReturns        PurchaseReturn[]
+  replacementReturns     SalesReturn[]       @relation("ReturnReplacementWarehouse")
+  oldBatteriesStocked    OldBattery[]        @relation("OldBatteryStockWarehouse")
+  oldBatteryReplacements OldBattery[]        @relation("OldBatteryReplacementWarehouse")
+  transfersFrom          StockTransfer[]     @relation("TransferFrom")
+  transfersTo            StockTransfer[]     @relation("TransferTo")
+  locations              WarehouseLocation[]
+  productLocations       ProductLocation[]
+  productWarehouses      ProductWarehouse[]
+  customerWarehouses     CustomerWarehouse[]
+  supplierWarehouses     SupplierWarehouse[]
+  userLinks              UserWarehouse[]
+  documents              TradeDocument[]
 }
 
 /// حقول اختيارية عامة على الأصناف (ماركة، لون…) — الصنف اللي مش محتاجها يسيبها فاضية
@@ -150,38 +153,44 @@ model ProductCustomField {
 }
 
 model Product {
-  id          String   @id @default(cuid())
-  sku         String   @unique
-  name        String
-  unit        String   @default("قطعة")
-  costPrice   Float    @default(0)
-  salePrice   Float    @default(0)
+  id             String   @id @default(cuid())
+  sku            String   @unique
+  name           String
+  unit           String   @default("قطعة")
+  costPrice      Float    @default(0)
+  salePrice      Float    @default(0)
   minStock       Float    @default(0)
   description    String?
   barcode        String?  @unique
   brand          String?
+  /// مقاس البطارية (مثل 55 أمبير / 70 أمبير)
+  batterySize    String?
   categoryId     String?
   wholesalePrice Float    @default(0)
   packUnit       String?
   packSize       Float    @default(1)
   imageFile      String?
   isActive       Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  category            Category?          @relation(fields: [categoryId], references: [id])
-  fieldValues         ProductFieldValue[]
-  customerPrices      CustomerPrice[]
-  locations           ProductLocation[]
-  warehouses          ProductWarehouse[]
-  documentLines       TradeDocumentLine[]
-  stockBalances       StockBalance[]
-  stockMovements      StockMovement[]
-  salesLines          SalesInvoiceLine[]
-  purchaseLines       PurchaseInvoiceLine[]
-  salesReturnLines    SalesReturnLine[]
-  purchaseReturnLines PurchaseReturnLine[]
-  transferLines       StockTransferLine[]
+  category               Category?             @relation(fields: [categoryId], references: [id])
+  fieldValues            ProductFieldValue[]
+  customerPrices         CustomerPrice[]
+  locations              ProductLocation[]
+  warehouses             ProductWarehouse[]
+  documentLines          TradeDocumentLine[]
+  stockBalances          StockBalance[]
+  stockMovements         StockMovement[]
+  salesLines             SalesInvoiceLine[]
+  purchaseLines          PurchaseInvoiceLine[]
+  salesReturnLines       SalesReturnLine[]
+  purchaseReturnLines    PurchaseReturnLine[]
+  transferLines          StockTransferLine[]
+  replacementReturns     SalesReturn[]         @relation("ReturnReplacementProduct")
+  oldBatteries           OldBattery[]          @relation("OldBatteryProduct")
+  oldBatteriesStocked    OldBattery[]          @relation("OldBatteryStockProduct")
+  oldBatteryReplacements OldBattery[]          @relation("OldBatteryReplacementProduct")
 }
 
 /// أصناف مربوطة بمخزن معيّن. لو الصنف مفيهوش صفوف هنا يبقى متاح لكل المخازن.
@@ -237,12 +246,12 @@ model StockMovement {
 }
 
 model StockTransfer {
-  id             String   @id @default(cuid())
-  number         String   @unique
+  id              String   @id @default(cuid())
+  number          String   @unique
   fromWarehouseId String
   toWarehouseId   String
-  note           String?
-  createdAt      DateTime @default(now())
+  note            String?
+  createdAt       DateTime @default(now())
 
   fromWarehouse Warehouse           @relation("TransferFrom", fields: [fromWarehouseId], references: [id])
   toWarehouse   Warehouse           @relation("TransferTo", fields: [toWarehouseId], references: [id])
@@ -276,32 +285,35 @@ model Supplier {
   purchaseReturns  PurchaseReturn[]
   payments         Payment[]
   checks           BankCheck[]
-  documents        TradeDocument[] @relation("DocSupplier")
+  documents        TradeDocument[]     @relation("DocSupplier")
   warehouses       SupplierWarehouse[]
+  scrapSales       ScrapSale[]
+  oldBatteries     OldBattery[]
 }
 
 model Customer {
-  id             String   @id @default(cuid())
-  code           String   @unique
+  id             String          @id @default(cuid())
+  code           String          @unique
   name           String
   phone          String?
   email          String?
   address        String?
-  balance        Float     @default(0)
-  creditLimit    Float     @default(0)
-  priceList      PriceList @default(RETAIL)
+  balance        Float           @default(0)
+  creditLimit    Float           @default(0)
+  priceList      PriceList       @default(RETAIL)
   notes          String?
   checks         BankCheck[]
   customerPrices CustomerPrice[]
   documents      TradeDocument[] @relation("DocCustomer")
-  isActive       Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   salesInvoices SalesInvoice[]
   salesReturns  SalesReturn[]
   receipts      Receipt[]
   warehouses    CustomerWarehouse[]
+  oldBatteries  OldBattery[]
 }
 
 /// عملاء مربوطين بمخزن. من غير صفوف = ظاهر لكل المخازن.
@@ -331,14 +343,14 @@ model SupplierWarehouse {
 }
 
 model CashAccount {
-  id        String   @id @default(cuid())
-  code      String   @unique
-  name      String
-  accountType String @default("CASH")
-  balance   Float    @default(0)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  accountType String   @default("CASH")
+  balance     Float    @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   transactions CashTransaction[]
   payments     Payment[]
@@ -347,6 +359,8 @@ model CashAccount {
   expenses     Expense[]
   checks       BankCheck[]
   payMethod    PayMethod?
+  salesReturns SalesReturn[]
+  scrapSales   ScrapSale[]
 }
 
 model PayMethod {
@@ -391,19 +405,28 @@ model SalesInvoice {
   paidAmount    Float         @default(0)
   paymentMethod String        @default("")
   taxRate       Float         @default(0)
+  /// بطارية خردة مع الفاتورة (وزن × سعر الكيلو يُضاف للإجمالي)
+  hasScrap      Boolean       @default(false)
+  scrapKg       Float         @default(0)
+  scrapPieces   Float         @default(0)
+  scrapPriceKg  Float         @default(0)
+  scrapAmount   Float         @default(0)
+  /// SCRAP خردة عادية · WARRANTY_SWAP زبون ضمان دفع فرق وخد جديدة
+  scrapKind     String        @default("SCRAP")
   shiftId       String?
   notes         String?
   createdById   String?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  customer  Customer           @relation(fields: [customerId], references: [id])
-  shift     CashierShift?      @relation(fields: [shiftId], references: [id])
-  warehouse Warehouse          @relation(fields: [warehouseId], references: [id])
-  createdBy User?              @relation("SalesCreatedBy", fields: [createdById], references: [id])
-  lines     SalesInvoiceLine[]
-  receipts  Receipt[]
-  returns   SalesReturn[]
+  customer     Customer           @relation(fields: [customerId], references: [id])
+  shift        CashierShift?      @relation(fields: [shiftId], references: [id])
+  warehouse    Warehouse          @relation(fields: [warehouseId], references: [id])
+  createdBy    User?              @relation("SalesCreatedBy", fields: [createdById], references: [id])
+  lines        SalesInvoiceLine[]
+  receipts     Receipt[]
+  returns      SalesReturn[]
+  oldBatteries OldBattery[]
 
   @@index([invoiceDate])
   @@index([status])
@@ -437,6 +460,8 @@ model PurchaseInvoice {
   total         Float         @default(0)
   paidAmount    Float         @default(0)
   paymentMethod String        @default("")
+  /// قيمة خردة مبيعة لنفس المورد ومخصومة من الفاتورة (الإجمالي بعد خصمها)
+  scrapAmount   Float         @default(0)
   notes         String?
   createdById   String?
   createdAt     DateTime      @default(now())
@@ -448,6 +473,7 @@ model PurchaseInvoice {
   lines     PurchaseInvoiceLine[]
   payments  Payment[]
   returns   PurchaseReturn[]
+  scrapSale ScrapSale?
 
   @@index([invoiceDate])
   @@index([status])
@@ -471,20 +497,36 @@ model PurchaseInvoiceLine {
 }
 
 model SalesReturn {
-  id              String   @id @default(cuid())
-  number          String   @unique
-  salesInvoiceId  String?
-  customerId      String
-  warehouseId     String
-  returnDate      DateTime @default(now())
-  total           Float    @default(0)
-  notes           String?
-  createdAt       DateTime @default(now())
+  id                     String   @id @default(cuid())
+  number                 String   @unique
+  salesInvoiceId         String?
+  customerId             String?
+  /// اسم عميل اختياري (نص حر)
+  customerName           String?
+  warehouseId            String
+  returnDate             DateTime @default(now())
+  total                  Float    @default(0)
+  notes                  String?
+  /// خردة بالوزن/القطع (ينفع بدون صنف)
+  scrapKg                Float    @default(0)
+  scrapPieces            Float    @default(0)
+  /// استهلاك فلوس اختياري → حركة إيراد على الخزنة
+  consumptionAmount      Float    @default(0)
+  cashAccountId          String?
+  /// استبدال ببطارية جديدة من مخزن آخر
+  giveReplacement        Boolean  @default(false)
+  replacementProductId   String?
+  replacementWarehouseId String?
+  replacementQty         Float    @default(0)
+  createdAt              DateTime @default(now())
 
-  salesInvoice SalesInvoice?     @relation(fields: [salesInvoiceId], references: [id])
-  customer     Customer          @relation(fields: [customerId], references: [id])
-  warehouse    Warehouse         @relation(fields: [warehouseId], references: [id])
-  lines        SalesReturnLine[]
+  salesInvoice         SalesInvoice?     @relation(fields: [salesInvoiceId], references: [id])
+  customer             Customer?         @relation(fields: [customerId], references: [id])
+  warehouse            Warehouse         @relation(fields: [warehouseId], references: [id])
+  cashAccount          CashAccount?      @relation(fields: [cashAccountId], references: [id])
+  replacementProduct   Product?          @relation("ReturnReplacementProduct", fields: [replacementProductId], references: [id])
+  replacementWarehouse Warehouse?        @relation("ReturnReplacementWarehouse", fields: [replacementWarehouseId], references: [id])
+  lines                SalesReturnLine[]
 }
 
 model SalesReturnLine {
@@ -502,15 +544,20 @@ model SalesReturnLine {
 }
 
 model PurchaseReturn {
-  id                 String   @id @default(cuid())
-  number             String   @unique
-  purchaseInvoiceId  String?
-  supplierId         String
-  warehouseId        String
-  returnDate         DateTime @default(now())
-  total              Float    @default(0)
-  notes              String?
-  createdAt          DateTime @default(now())
+  id                String   @id @default(cuid())
+  number            String   @unique
+  purchaseInvoiceId String?
+  supplierId        String
+  warehouseId       String
+  returnDate        DateTime @default(now())
+  total             Float    @default(0)
+  /// استهلاك بندفعه للمورد على المرتجع: BALANCE على حسابه · CASH دفع فوري
+  consumptionFee    Float    @default(0)
+  feeSettlement     String?
+  feeMethodId       String?
+  feeCashAccountId  String?
+  notes             String?
+  createdAt         DateTime @default(now())
 
   purchaseInvoice PurchaseInvoice?     @relation(fields: [purchaseInvoiceId], references: [id])
   supplier        Supplier             @relation(fields: [supplierId], references: [id])
@@ -519,29 +566,116 @@ model PurchaseReturn {
 }
 
 model PurchaseReturnLine {
-  id        String @id @default(cuid())
-  returnId  String
-  productId String
-  quantity  Float
-  unitCost  Float
-  total     Float
+  id           String @id @default(cuid())
+  returnId     String
+  productId    String
+  quantity     Float
+  unitCost     Float
+  total        Float
+  /// كمية تم استلامها تاني بعد المرتجع في مخزن جديد
+  restockedQty Float  @default(0)
 
   purchaseReturn PurchaseReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
   product        Product        @relation(fields: [productId], references: [id])
 }
 
+/// بطارية قديمة دخلت المحل (خردة من فاتورة بيع / ضمان زبون / يدوي).
+/// بتتفرز بالليل: خردة · مستعمل · سيرفس · مرتجع ضمان للمورد
+model OldBattery {
+  id                     String    @id @default(cuid())
+  number                 String    @unique
+  source                 String
+  ownership              String    @default("SHOP")
+  productId              String?
+  label                  String?
+  salesInvoiceId         String?
+  customerId             String?
+  customerName           String?
+  customerPhone          String?
+  intakeValue            Float     @default(0)
+  receivedAt             DateTime  @default(now())
+  productionDate         DateTime?
+  ageBand                String?
+  condition              String?
+  decision               String    @default("PENDING")
+  sortedAt               DateTime?
+  stockProductId         String?
+  stockWarehouseId       String?
+  weightKg               Float?
+  scrapSaleId            String?
+  supplierId             String?
+  claimStatus            String?
+  sentAt                 DateTime?
+  receiverName           String?
+  replacementAt          DateTime?
+  replacementProductId   String?
+  replacementWarehouseId String?
+  consumptionFee         Float     @default(0)
+  feeSettlement          String?
+  feeMethodId            String?
+  feeCashAccountId       String?
+  deliveredAt            DateTime?
+  notes                  String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  product              Product?      @relation("OldBatteryProduct", fields: [productId], references: [id], onDelete: SetNull)
+  stockProduct         Product?      @relation("OldBatteryStockProduct", fields: [stockProductId], references: [id], onDelete: SetNull)
+  replacementProduct   Product?      @relation("OldBatteryReplacementProduct", fields: [replacementProductId], references: [id], onDelete: SetNull)
+  stockWarehouse       Warehouse?    @relation("OldBatteryStockWarehouse", fields: [stockWarehouseId], references: [id], onDelete: SetNull)
+  replacementWarehouse Warehouse?    @relation("OldBatteryReplacementWarehouse", fields: [replacementWarehouseId], references: [id], onDelete: SetNull)
+  salesInvoice         SalesInvoice? @relation(fields: [salesInvoiceId], references: [id], onDelete: SetNull)
+  customer             Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  supplier             Supplier?     @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  scrapSale            ScrapSale?    @relation(fields: [scrapSaleId], references: [id], onDelete: SetNull)
+
+  @@index([decision])
+  @@index([claimStatus])
+  @@index([supplierId])
+  @@index([salesInvoiceId])
+}
+
+/// بيع خردة بالوزن لمورد. بمياه = خصم نسبة من الوزن.
+/// التسوية: INVOICE خصم من فاتورة شراء · CASH استلام فلوس · BALANCE خصم من حساب المورد
+model ScrapSale {
+  id                String   @id @default(cuid())
+  number            String   @unique
+  supplierId        String
+  saleDate          DateTime @default(now())
+  withWater         Boolean  @default(false)
+  waterPercent      Float    @default(15)
+  grossKg           Float
+  netKg             Float
+  priceKg           Float
+  amount            Float
+  settlement        String
+  purchaseInvoiceId String?  @unique
+  cashAccountId     String?
+  paymentMethod     String   @default("")
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  supplier        Supplier         @relation(fields: [supplierId], references: [id])
+  purchaseInvoice PurchaseInvoice? @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Cascade)
+  cashAccount     CashAccount?     @relation(fields: [cashAccountId], references: [id])
+  oldBatteries    OldBattery[]
+
+  @@index([supplierId])
+  @@index([saleDate])
+}
+
 model Payment {
-  id                 String        @id @default(cuid())
-  number             String        @unique
-  supplierId         String
-  cashAccountId      String?
-  purchaseInvoiceId  String?
-  amount             Float
-  paymentMethod      String        @default("")
-  referenceNo        String?
-  note               String?
-  paidAt             DateTime      @default(now())
-  createdAt          DateTime      @default(now())
+  id                String   @id @default(cuid())
+  number            String   @unique
+  supplierId        String
+  cashAccountId     String?
+  purchaseInvoiceId String?
+  amount            Float
+  paymentMethod     String   @default("")
+  referenceNo       String?
+  note              String?
+  paidAt            DateTime @default(now())
+  createdAt         DateTime @default(now())
 
   supplier        Supplier         @relation(fields: [supplierId], references: [id])
   cashAccount     CashAccount?     @relation(fields: [cashAccountId], references: [id])
@@ -549,18 +683,18 @@ model Payment {
 }
 
 model Receipt {
-  id              String        @id @default(cuid())
-  number          String        @unique
-  customerId      String
-  cashAccountId   String?
-  salesInvoiceId  String?
-  amount          Float
-  paymentMethod   String        @default("")
-  referenceNo     String?
-  note            String?
-  shiftId         String?
-  receivedAt      DateTime      @default(now())
-  createdAt       DateTime      @default(now())
+  id             String   @id @default(cuid())
+  number         String   @unique
+  customerId     String
+  cashAccountId  String?
+  salesInvoiceId String?
+  amount         Float
+  paymentMethod  String   @default("")
+  referenceNo    String?
+  note           String?
+  shiftId        String?
+  receivedAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
 
   customer     Customer      @relation(fields: [customerId], references: [id])
   cashAccount  CashAccount?  @relation(fields: [cashAccountId], references: [id])
@@ -684,11 +818,11 @@ model CashierShift {
   openedAt      DateTime    @default(now())
   closedAt      DateTime?
 
-  user      User            @relation(fields: [userId], references: [id])
-  account   CashAccount     @relation(fields: [cashAccountId], references: [id])
-  invoices  SalesInvoice[]
-  receipts  Receipt[]
-  expenses  Expense[]
+  user     User           @relation(fields: [userId], references: [id])
+  account  CashAccount    @relation(fields: [cashAccountId], references: [id])
+  invoices SalesInvoice[]
+  receipts Receipt[]
+  expenses Expense[]
 }
 
 model ExpenseCategory {
@@ -698,15 +832,15 @@ model ExpenseCategory {
 }
 
 model Expense {
-  id            String        @id @default(cuid())
+  id            String   @id @default(cuid())
   categoryId    String
   accountId     String
   shiftId       String?
   amount        Float
-  expenseDate   DateTime      @default(now())
-  paymentMethod String        @default("")
+  expenseDate   DateTime @default(now())
+  paymentMethod String   @default("")
   notes         String?
-  createdAt     DateTime      @default(now())
+  createdAt     DateTime @default(now())
 
   category ExpenseCategory @relation(fields: [categoryId], references: [id])
   account  CashAccount     @relation(fields: [accountId], references: [id])
@@ -714,24 +848,24 @@ model Expense {
 }
 
 model BankCheck {
-  id          String         @id @default(cuid())
-  direction   CheckDirection
-  checkNumber String
-  bankName    String
-  amount      Float
-  issueDate   DateTime       @default(now())
-  dueDate     DateTime
-  status      CheckStatus    @default(PENDING)
-  customerId       String?
-  supplierId       String?
-  accountId        String?
-  salesInvoiceId   String?
+  id                String         @id @default(cuid())
+  direction         CheckDirection
+  checkNumber       String
+  bankName          String
+  amount            Float
+  issueDate         DateTime       @default(now())
+  dueDate           DateTime
+  status            CheckStatus    @default(PENDING)
+  customerId        String?
+  supplierId        String?
+  accountId         String?
+  salesInvoiceId    String?
   purchaseInvoiceId String?
-  methodId         String?
-  receiptId        String?
-  paymentId        String?
-  notes            String?
-  createdAt   DateTime       @default(now())
+  methodId          String?
+  receiptId         String?
+  paymentId         String?
+  notes             String?
+  createdAt         DateTime       @default(now())
 
   customer Customer?    @relation(fields: [customerId], references: [id])
   supplier Supplier?    @relation(fields: [supplierId], references: [id])
@@ -810,17 +944,17 @@ enum OrgKind {
 }
 
 model OrgNode {
-  id          String   @id @default(cuid())
-  kind        OrgKind
-  name        String
-  code        String?
-  subtitle    String?
-  levelMark   String?
-  parentId    String?
-  sortOrder   Int      @default(0)
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  kind      OrgKind
+  name      String
+  code      String?
+  subtitle  String?
+  levelMark String?
+  parentId  String?
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   parent   OrgNode?  @relation("OrgParent", fields: [parentId], references: [id])
   children OrgNode[] @relation("OrgParent")
@@ -858,11 +992,11 @@ enum TaskPriority {
 }
 
 model WorkTask {
-  id            String       @id @default(cuid())
+  id            String        @id @default(cuid())
   title         String
   description   String?
-  status        TaskStatus   @default(PENDING)
-  priority      TaskPriority @default(MEDIUM)
+  status        TaskStatus    @default(PENDING)
+  priority      TaskPriority  @default(MEDIUM)
   assigneeId    String?
   assigneeName  String?
   dueDate       DateTime?
@@ -871,8 +1005,8 @@ model WorkTask {
   entityLabel   String?
   createdById   String?
   createdByName String?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
   comments      TaskComment[]
 
   @@index([status])
@@ -940,22 +1074,22 @@ model FileBlob {
 }
 
 model AutomationRule {
-  id        String   @id @default(cuid())
+  id        String          @id @default(cuid())
   name      String
   trigger   String
   action    String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  isActive  Boolean         @default(true)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
   runs      AutomationRun[]
 }
 
 model AutomationRun {
-  id        String   @id @default(cuid())
+  id        String         @id @default(cuid())
   ruleId    String
-  dedupeKey String   @unique
+  dedupeKey String         @unique
   summary   String
-  createdAt DateTime @default(now())
+  createdAt DateTime       @default(now())
   rule      AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
 
   @@index([createdAt])

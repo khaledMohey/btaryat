@@ -8,6 +8,7 @@ import { useColumns } from '../lib/columns';
 import { useToast } from '../lib/feedback';
 import { FilterOption, IconAction, ListBar } from '../components/ListBar';
 import { WarehouseMultiSelect } from '../components/WarehouseMultiSelect';
+import { LedgerDetailModal } from '../components/LedgerDetailModal';
 import {
   Badge, Button, Card, Empty, Field, Input, Label, Modal, PageHeader, Pager, PrintHeader, StatCard, StatGrid, Table, Td, Th,
 } from '../components/ui';
@@ -32,6 +33,8 @@ type StatementRow = {
   balance: number;
   method?: string | null;
   note?: string | null;
+  kind?: string;
+  id?: string;
 };
 
 type SupplierForm = { code: string; name: string; phone: string; address: string; isActive: boolean; warehouseIds: string[] };
@@ -54,6 +57,7 @@ export function SuppliersPage() {
   const [saving, setSaving] = useState(false);
   const [stmtOpen, setStmtOpen] = useState(false);
   const [statement, setStatement] = useState<{ supplier: Supplier; statement: StatementRow[]; balance: number } | null>(null);
+  const [ledgerDetail, setLedgerDetail] = useState<{ kind: string; id: string; title: string } | null>(null);
   const [form, setForm] = useState<SupplierForm>(emptySupplier);
   const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([]);
   const [dueDates, setDueDates] = useState<Record<string, string>>({});
@@ -367,7 +371,20 @@ export function SuppliersPage() {
                   <tr key={index} className={row.debit > 0 ? 'row-debit' : row.credit > 0 ? 'row-credit' : ''}>
                     <Td className="whitespace-nowrap text-slate-600">{formatDate(row.date)}</Td>
                     <Td className="font-semibold">{row.type}</Td>
-                    <Td><span className="font-mono text-xs font-bold text-brand-700" dir="ltr">{row.ref}</span></Td>
+                    <Td>
+                      {row.kind && row.id ? (
+                        <button
+                          type="button"
+                          className="font-mono text-xs font-bold text-brand-700 underline-offset-2 hover:underline"
+                          dir="ltr"
+                          onClick={() => setLedgerDetail({ kind: row.kind!, id: row.id!, title: `${row.type} · ${row.ref}` })}
+                        >
+                          {row.ref}
+                        </button>
+                      ) : (
+                        <span className="font-mono text-xs font-bold text-brand-700" dir="ltr">{row.ref}</span>
+                      )}
+                    </Td>
                     <Td className="text-muted">{row.method || '—'}</Td>
                     <Td className="font-semibold text-emerald-700">{row.debit ? formatMoney(row.debit) : '—'}</Td>
                     <Td className="font-semibold text-rose-700">{row.credit ? formatMoney(row.credit) : '—'}</Td>
@@ -379,6 +396,15 @@ export function SuppliersPage() {
           </div>
         )}
       </Modal>
+
+      <LedgerDetailModal
+        open={!!ledgerDetail}
+        onClose={() => setLedgerDetail(null)}
+        party="supplier"
+        kind={ledgerDetail?.kind}
+        id={ledgerDetail?.id}
+        title={ledgerDetail?.title}
+      />
     </div>
   );
 }

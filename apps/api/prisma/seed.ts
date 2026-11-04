@@ -1,4 +1,4 @@
-import { PrismaClient, Role, FieldType } from '@prisma/client';
+import { PrismaClient, Role } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
@@ -34,32 +34,20 @@ async function main() {
     update: {},
   });
 
-  const existingFields = await prisma.productCustomField.count();
-  if (existingFields === 0) {
-    await prisma.productCustomField.createMany({
-      data: [
-        {
-          name: 'brand',
-          label: 'العلامة التجارية',
-          fieldType: FieldType.TEXT,
-          sortOrder: 1,
-        },
-        {
-          name: 'color',
-          label: 'اللون',
-          fieldType: FieldType.SELECT,
-          options: 'أحمر,أزرق,أسود,أبيض',
-          sortOrder: 2,
-        },
-        {
-          name: 'size',
-          label: 'المقاس',
-          fieldType: FieldType.TEXT,
-          sortOrder: 3,
-        },
-      ],
-    });
-  }
+  await prisma.warehouse.upsert({
+    where: { code: 'RETURNS' },
+    create: {
+      code: 'RETURNS',
+      name: 'مخزن المرتجعات',
+      description: 'مخزن ثابت لاستلام مرتجعات البيع',
+    },
+    update: { name: 'مخزن المرتجعات', isActive: true },
+  });
+
+  // احذف حقول قديمة مش مستخدمة في نظام البطاريات
+  await prisma.productCustomField.deleteMany({
+    where: { name: { in: ['brand', 'color', 'size'] } },
+  });
 
   await prisma.cashAccount.upsert({
     where: { code: 'CASH01' },

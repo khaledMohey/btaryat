@@ -9,7 +9,8 @@ import { claimRequest, finishRequest, releaseRequest } from '../common/idempoten
 import { pageResult, readPage } from '../common/paging';
 import { dueTone } from '../common/due';
 import { purchasePriceHints } from '../common/price-hints';
-
+import { recostProducts } from '../common/fifo';
+import { ScrapCalc, ScrapInput, scrapCalc, syncInvoiceScrap } from '../common/scrap';
 @Injectable()
 export class PurchasesService {
   constructor(
@@ -39,6 +40,7 @@ export class PurchasesService {
       warehouse: true,
       lines: { include: { product: true } },
       payments: { orderBy: { paidAt: 'asc' as const } },
+      scrapSale: true,
     };
     if (!page) {
       return this.prisma.purchaseInvoice.findMany({ where, include, orderBy: { createdAt: 'desc' } });
@@ -81,6 +83,7 @@ export class PurchasesService {
         warehouse: true,
         lines: { include: { product: true } },
         payments: true,
+        scrapSale: true,
         createdBy: { select: { fullName: true } },
       },
     });
@@ -100,6 +103,7 @@ export class PurchasesService {
     confirm?: boolean;
     createdById?: string;
     idempotencyKey?: string;
+    scrap?: ScrapInput | null;
     lines: { productId: string; quantity: number; unitCost: number; discount?: number; batchNumber?: string; expiryDate?: string }[];
   }) {
     if (!data.lines?.length) throw new BadRequestException('أضف بنوداً للفاتورة');
@@ -126,10 +130,13 @@ export class PurchasesService {
     payments?: TenderInput[];
     confirm?: boolean;
     createdById?: string;
+    scrap?: ScrapInput | null;
     lines: { productId: string; quantity: number; unitCost: number; discount?: number; batchNumber?: string; expiryDate?: string }[];
   }) {
     await assertPeriodsOpen(this.prisma, data.invoiceDate || new Date());
     const number = await this.sequence.next('purchases', 'PUR');
+    const scrap = scrapCalc(data.scrap);
+    const scrapNumber = scrap.amount > 0.009 ? await this.sequence.next('scrap', 'SCR') : undefined;
     const parts = normalizeTenders(data.payments);
     const lines = data.lines.map((l) => ({
       productId: l.productId,
@@ -144,7 +151,8 @@ export class PurchasesService {
     const discount = data.discount || 0;
     const taxPercent = data.tax || 0;
     const tax = taxFromPercent(subtotal, discount, taxPercent);
-    const total = subtotal - discount + tax;
+    const total = Math.round((subtotal - discount + tax - scrap.amount) * 100) / 100;
+    if (total < -0.009) throw new BadRequestException('قيمة الخردة أكبر من إجمالي الفاتورة — سجّلها كبيع خردة منفصل وخصمها من حساب المورد');
     const paidAmount = paidAmountOf(parts, data.paidAmount || 0);
     assertPaidFits(paidAmount, total, !!data.confirm, parts.length);
     const paymentNumbers: string[] = [];
@@ -192,6 +200,7 @@ export class PurchasesService {
           discount,
           tax,
           total,
+          scrapAmount: scrap.amount,
           paidAmount,
           paymentMethod: parts.length === 1 ? parts[0].methodId : '',
           notes: data.notes,
@@ -200,6 +209,17 @@ export class PurchasesService {
         },
         include: { supplier: true, warehouse: true, lines: { include: { product: true } } },
       });
+
+      if (scrap.amount > 0.009) {
+        await syncInvoiceScrap(tx, {
+          purchaseInvoiceId: invoice.id,
+          supplierId: data.supplierId,
+          saleDate: invoice.invoiceDate,
+          calc: scrap,
+          number: scrapNumber,
+          notes: data.scrap?.notes?.trim() || null,
+        });
+      }
 
       if (data.confirm && parts.length) {
         await postSupplierTenders(tx, {
@@ -276,11 +296,12 @@ export class PurchasesService {
     paidAmount?: number;
     payments?: TenderInput[];
     confirm?: boolean;
+    scrap?: ScrapInput | null;
     lines: { id?: string; productId: string; quantity: number; unitCost: number; discount?: number; batchNumber?: string; expiryDate?: string }[];
   }) {
     const inv = await this.prisma.purchaseInvoice.findUnique({
       where: { id },
-      include: { lines: true, payments: true, returns: true },
+      include: { lines: true, payments: true, returns: true, scrapSale: true },
     });
     if (!inv) throw new NotFoundException('فاتورة الشراء غير موجودة');
     await assertPeriodsOpen(this.prisma, inv.invoiceDate, data.invoiceDate);
@@ -301,14 +322,29 @@ export class PurchasesService {
     const discount = data.discount || 0;
     const taxPercent = data.tax || 0;
     const tax = Math.round((subtotal - discount) * taxPercent * 100) / 10000;
-    const total = subtotal - discount + tax;
+    const scrap = data.scrap === undefined
+      ? scrapCalc(inv.scrapSale ? { withWater: inv.scrapSale.withWater, grossKg: inv.scrapSale.grossKg, priceKg: inv.scrapSale.priceKg } : null)
+      : scrapCalc(data.scrap);
+    const total = Math.round((subtotal - discount + tax - scrap.amount) * 100) / 100;
+    if (total < -0.009) throw new BadRequestException('قيمة الخردة أكبر من إجمالي الفاتورة');
+    const scrapNumber = scrap.amount > 0.009 && !inv.scrapSale ? await this.sequence.next('scrap', 'SCR') : undefined;
+    const scrapSync = {
+      calc: scrap,
+      number: scrapNumber,
+      notes: data.scrap === undefined ? undefined : (data.scrap?.notes?.trim() || null),
+    };
     const parts = data.payments ? normalizeTenders(data.payments) : [];
     const paidAmount = data.payments ? sumTenders(parts) : (data.paidAmount ?? inv.paidAmount);
     if (paidAmount > total + 0.009) throw new BadRequestException('المدفوع أكبر من إجمالي الفاتورة');
     const alreadyPosted = inv.status !== InvoiceStatus.DRAFT;
     const posting = alreadyPosted || !!data.confirm;
     if (posting && paidAmount > 0 && !parts.length) throw new BadRequestException('قسّم المدفوع على طرق الدفع');
-    if (alreadyPosted) return this.revisePostedPurchase(id, inv, data, lines, parts, subtotal, discount, tax, total);
+    const touched = [...inv.lines.map((l) => l.productId), ...lines.map((l) => l.productId)];
+    if (alreadyPosted) {
+      const revised = await this.revisePostedPurchase(id, inv, data, lines, parts, subtotal, discount, tax, total, scrapSync);
+      await recostProducts(this.prisma, touched);
+      return revised;
+    }
 
     const paymentNumbers: string[] = [];
     if (posting) {
@@ -361,7 +397,7 @@ export class PurchasesService {
             ? InvoiceStatus.PARTIAL
             : InvoiceStatus.CONFIRMED;
 
-      return tx.purchaseInvoice.update({
+      const saved = await tx.purchaseInvoice.update({
         where: { id },
         data: {
           supplierId: data.supplierId,
@@ -371,6 +407,7 @@ export class PurchasesService {
           discount,
           tax,
           total,
+          scrapAmount: scrap.amount,
           paidAmount,
           paymentMethod: parts.length === 1 ? parts[0].methodId : (parts.length ? '' : inv.paymentMethod),
           notes: data.notes,
@@ -379,6 +416,8 @@ export class PurchasesService {
         },
         include: { supplier: true, warehouse: true, lines: { include: { product: true } }, payments: true },
       });
+      await syncInvoiceScrap(tx, { purchaseInvoiceId: id, supplierId: data.supplierId, saleDate: saved.invoiceDate, ...scrapSync });
+      return saved;
     });
   }
 
@@ -401,6 +440,7 @@ export class PurchasesService {
     discount: number,
     tax: number,
     total: number,
+    scrapSync: { calc: ScrapCalc; number?: string; notes?: string | null },
   ) {
     const replacements = parts.filter((part) => {
       if (!part.id) return true;
@@ -462,7 +502,7 @@ export class PurchasesService {
         : paidAmount > 0
           ? InvoiceStatus.PARTIAL
           : InvoiceStatus.CONFIRMED;
-      return tx.purchaseInvoice.update({
+      const saved = await tx.purchaseInvoice.update({
         where: { id },
         data: {
           supplierId: data.supplierId,
@@ -472,6 +512,7 @@ export class PurchasesService {
           discount,
           tax,
           total,
+          scrapAmount: scrapSync.calc.amount,
           paidAmount,
           paymentMethod: methods.length === 1 ? methods[0].paymentMethod : '',
           notes: data.notes,
@@ -479,6 +520,8 @@ export class PurchasesService {
         },
         include: { supplier: true, warehouse: true, lines: { include: { product: true } }, payments: true },
       });
+      await syncInvoiceScrap(tx, { purchaseInvoiceId: id, supplierId: data.supplierId, saleDate: saved.invoiceDate, ...scrapSync });
+      return saved;
     });
   }
 
@@ -490,53 +533,52 @@ export class PurchasesService {
     oldLines: { productId: string; quantity: number; unitCost: number }[],
     newLines: { productId: string; quantity: number; unitCost: number }[],
   ) {
-    if (oldWarehouse !== newWarehouse) {
-      for (const line of oldLines) {
-        const bal = await tx.stockBalance.findUnique({
-          where: { warehouseId_productId: { warehouseId: oldWarehouse, productId: line.productId } },
-        });
-        if (!bal || bal.quantity < line.quantity) throw new BadRequestException('لا يمكن نقل الفاتورة لأن كمية المخزون أقل من كمية الفاتورة');
-        await tx.stockBalance.update({ where: { id: bal.id }, data: { quantity: { decrement: line.quantity } } });
-      }
-      for (const line of newLines) {
-        await tx.stockBalance.upsert({
-          where: { warehouseId_productId: { warehouseId: newWarehouse, productId: line.productId } },
-          create: { warehouseId: newWarehouse, productId: line.productId, quantity: line.quantity },
-          update: { quantity: { increment: line.quantity } },
-        });
-      }
-      return;
-    }
-    const oldQty = new Map<string, number>();
-    const newQty = new Map<string, number>();
-    for (const line of oldLines) oldQty.set(line.productId, (oldQty.get(line.productId) || 0) + line.quantity);
-    for (const line of newLines) newQty.set(line.productId, (newQty.get(line.productId) || 0) + line.quantity);
-    for (const productId of new Set([...oldQty.keys(), ...newQty.keys()])) {
-      const delta = (newQty.get(productId) || 0) - (oldQty.get(productId) || 0);
-      if (Math.abs(delta) < 0.0001) continue;
-      if (delta < 0) {
-        const bal = await tx.stockBalance.findUnique({
-          where: { warehouseId_productId: { warehouseId: oldWarehouse, productId } },
-        });
-        if (!bal || bal.quantity < -delta) throw new BadRequestException('لا يمكن إنقاص الكمية لأن المخزون أقل من الفرق');
-        await tx.stockBalance.update({ where: { id: bal.id }, data: { quantity: { increment: delta } } });
+    const delta = new Map<string, number>();
+    const bump = (wh: string, productId: string, qty: number) => {
+      const key = `${wh}|${productId}`;
+      delta.set(key, (delta.get(key) || 0) + qty);
+    };
+    for (const line of oldLines) bump(oldWarehouse, line.productId, -line.quantity);
+    for (const line of newLines) bump(newWarehouse, line.productId, line.quantity);
+    for (const [key, qty] of delta) {
+      if (Math.abs(qty) < 0.0001) continue;
+      const [warehouseId, productId] = key.split('|');
+      if (qty < 0) {
+        const bal = await tx.stockBalance.findUnique({ where: { warehouseId_productId: { warehouseId, productId } } });
+        if (!bal || bal.quantity < -qty - 0.0001) {
+          throw new BadRequestException('لا يمكن إنقاص/نقل الكمية لأن جزء منها اتباع أو اتصرف من المخزن');
+        }
+        await tx.stockBalance.update({ where: { id: bal.id }, data: { quantity: { increment: qty } } });
       } else {
         await tx.stockBalance.upsert({
-          where: { warehouseId_productId: { warehouseId: oldWarehouse, productId } },
-          create: { warehouseId: oldWarehouse, productId, quantity: delta },
-          update: { quantity: { increment: delta } },
+          where: { warehouseId_productId: { warehouseId, productId } },
+          create: { warehouseId, productId, quantity: qty },
+          update: { quantity: { increment: qty } },
         });
       }
-      const sample = newLines.find((line) => line.productId === productId) || oldLines.find((line) => line.productId === productId);
+    }
+    // حركات الشراء بتتكتب تاني بنفس وقت الاستلام الأصلي → الدفعة تفضل في مكانها في FIFO
+    const first = await tx.stockMovement.findFirst({
+      where: { reference, type: StockMovementType.PURCHASE },
+      orderBy: { createdAt: 'asc' },
+    });
+    const postedAt = first?.createdAt || new Date();
+    await tx.stockMovement.deleteMany({
+      where: { reference, type: { in: [StockMovementType.PURCHASE, StockMovementType.ADJUSTMENT] } },
+    });
+    for (const line of newLines as { productId: string; quantity: number; unitCost: number; batchNumber?: string | null; expiryDate?: Date | null }[]) {
       await tx.stockMovement.create({
         data: {
-          warehouseId: oldWarehouse,
-          productId,
-          type: StockMovementType.ADJUSTMENT,
-          quantity: delta,
-          unitCost: sample?.unitCost || 0,
+          warehouseId: newWarehouse,
+          productId: line.productId,
+          type: StockMovementType.PURCHASE,
+          quantity: line.quantity,
+          unitCost: line.unitCost,
           reference,
-          note: 'تعديل فاتورة شراء',
+          createdAt: postedAt,
+          note: [line.batchNumber && `تشغيلة: ${line.batchNumber}`, line.expiryDate && `صلاحية: ${line.expiryDate.toISOString().slice(0, 10)}`]
+            .filter(Boolean)
+            .join(' | ') || null,
         },
       });
     }
@@ -553,7 +595,7 @@ export class PurchasesService {
       throw new BadRequestException('لا يمكن حذف فاتورة عليها مرتجعات');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const removed = await this.prisma.$transaction(async (tx) => {
       if (inv.status !== InvoiceStatus.DRAFT) {
         for (const line of inv.lines) {
           const bal = await tx.stockBalance.findUnique({
@@ -575,8 +617,7 @@ export class PurchasesService {
         await tx.stockMovement.deleteMany({
           where: {
             reference: inv.number,
-            warehouseId: inv.warehouseId,
-            type: StockMovementType.PURCHASE,
+            type: { in: [StockMovementType.PURCHASE, StockMovementType.ADJUSTMENT] },
           },
         });
         const due = inv.total - inv.paidAmount;
@@ -593,5 +634,7 @@ export class PurchasesService {
       await tx.purchaseInvoice.delete({ where: { id } });
       return { ok: true };
     });
+    if (inv.status !== InvoiceStatus.DRAFT) await recostProducts(this.prisma, inv.lines.map((l) => l.productId));
+    return removed;
   }
 }

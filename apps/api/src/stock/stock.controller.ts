@@ -65,6 +65,17 @@ export class StockController {
     return this.service.valuation(warehouseId, search, warehouseIds);
   }
 
+  @Get('fifo')
+  fifo(@Query('productId') productId: string, @Query('warehouseId') warehouseId: string) {
+    return this.service.fifoDetail(productId, warehouseId);
+  }
+
+  @Post('fifo/recost')
+  @Roles(Role.ADMIN)
+  recost() {
+    return this.service.recostAll();
+  }
+
   @Get('movements')
   async movements(
     @Req() req: { user: { userId: string; role: string } },
@@ -135,7 +146,12 @@ export class StockController {
   @Roles(Role.ADMIN, Role.WAREHOUSE)
   async adjust(
     @Req() req: { user: { userId: string; role: string } },
-    @Body() dto: { warehouseId: string; note?: string; mode: 'set' | 'delta'; lines: { productId: string; quantity: number }[] },
+    @Body() dto: {
+      warehouseId: string;
+      note?: string;
+      mode: 'set' | 'delta';
+      lines: { productId: string; quantity: number; unitCost?: number }[];
+    },
   ) {
     await assertWarehouseAllowed(this.prisma, req.user, dto.warehouseId);
     return this.service.adjust(dto);

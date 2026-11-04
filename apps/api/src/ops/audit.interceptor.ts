@@ -39,7 +39,6 @@ function describe(method: string, path: string) {
     ['DELETE', '/stock', 'حذف حركة مخزون'],
     ['POST', '/cash', 'حركة خزنة'],
     ['POST', '/returns', 'تسجيل مرتجع'],
-    ['POST', '/documents', 'إنشاء مستند'],
     ['POST', '/finance', 'عملية مالية'],
     ['POST', '/users', 'إضافة مستخدم'],
     ['PATCH', '/users', 'تعديل مستخدم'],

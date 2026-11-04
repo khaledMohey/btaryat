@@ -18,7 +18,6 @@ const ReturnsPage = lazy(() => import('./pages/ReturnsPage').then((m) => ({ defa
 const ReportsPage = lazy(() => import('./pages/ReportsPage').then((m) => ({ default: m.ReportsPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const StockPage = lazy(() => import('./pages/StockPage').then((m) => ({ default: m.StockPage })));
-const DocumentsPage = lazy(() => import('./pages/DocumentsPage').then((m) => ({ default: m.DocumentsPage })));
 const FinancePage = lazy(() => import('./pages/FinancePage').then((m) => ({ default: m.FinancePage })));
 const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage })));
 const InsightsPage = lazy(() => import('./pages/InsightsPage').then((m) => ({ default: m.InsightsPage })));
@@ -65,7 +64,7 @@ export default function App() {
           <Route path="sales" element={<PageGuard page="sales"><SalesPage /></PageGuard>} />
           <Route path="purchases" element={<PageGuard page="purchases"><PurchasesPage /></PageGuard>} />
           <Route path="returns" element={<PageGuard page="returns"><ReturnsPage /></PageGuard>} />
-          <Route path="documents" element={<PageGuard page="documents"><DocumentsPage /></PageGuard>} />
+          <Route path="documents" element={<Navigate to="/sales" replace />} />
           <Route path="finance" element={<PageGuard page="finance"><FinancePage /></PageGuard>} />
           <Route path="reports" element={<PageGuard page="reports"><ReportsPage /></PageGuard>} />
           <Route path="analytics" element={<PageGuard page="analytics"><AnalyticsPage /></PageGuard>} />

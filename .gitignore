@@ -24,3 +24,14 @@ coverage
 
 .vercel
 .env*
+
+tests/e2e/server.log
+apps/api/prisma/pytest-e2e.db*
+__pycache__/
+
+# ????? ?????/?????
+/auth
+/auth-wal
+/db
+/db-wal
+tmp-menu-preview.*

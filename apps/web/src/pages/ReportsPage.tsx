@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, ArrowDownLeft, ArrowUpRight, Boxes, Coins, Download, FileSpreadsheet, Package, PackageX, Percent, Printer, ShoppingCart,
-  TrendingDown, TrendingUp, Truck, Wallet,
+  AlertTriangle, ArrowDownLeft, ArrowUpRight, Boxes, Coins, Download, FileSpreadsheet, Package, PackageX, Percent, Printer, Redo2, ShoppingCart,
+  TrendingDown, TrendingUp, Truck, Undo2, Users, Wallet, CalendarDays as CalendarIcon,
 } from 'lucide-react';
 import { loadExcel } from '../lib/excel';
 import { api, formatDate, formatMoney, getApiBase } from '../lib/api';
@@ -25,7 +25,7 @@ type ProfitLine = {
 
 const PROFIT_KIND: Record<ProfitLine['kind'], { label: string; tone: 'emerald' | 'rose' | 'sky' | 'amber' | 'violet' | 'slate' }> = {
   REVENUE: { label: 'إيراد بيع', tone: 'emerald' },
-  TAX: { label: 'ضريبة', tone: 'emerald' },
+  TAX: { label: 'ضريبة (خارج الربح)', tone: 'slate' },
   RETURN: { label: 'مرتجع بيع', tone: 'rose' },
   DISCOUNT: { label: 'خصم فاتورة', tone: 'amber' },
   COGS: { label: 'تكلفة بضاعة', tone: 'sky' },
@@ -39,7 +39,6 @@ function ProfitView({
   expenses,
   gross,
   net,
-  invoiceDiff,
   lines,
 }: {
   revenue: number;
@@ -47,7 +46,7 @@ function ProfitView({
   expenses: number;
   gross: number;
   net: number;
-  invoiceDiff: number;
+  invoiceDiff?: number;
   lines: ProfitLine[];
 }) {
   const [filter, setFilter] = useState<'all' | 'IN' | 'OUT' | 'REVENUE' | 'COGS' | 'EXPENSE'>('all');
@@ -67,10 +66,10 @@ function ProfitView({
   return (
     <div className="space-y-4">
       <StatGrid>
-        <StatCard label="صافي إيراد البيع" value={formatMoney(revenue)} hint="بعد المرتجعات والخصم والضريبة" icon={ShoppingCart} tone="emerald" />
-        <StatCard label="تكلفة البضاعة المباعة" value={formatMoney(cogs)} hint="من تكلفة الصنف وقت البيع" icon={Coins} tone="sky" />
+        <StatCard label="صافي الإيراد" value={formatMoney(revenue)} hint="مبيعات + خردة + استهلاك مرتجع − خصم − مرتجع بقيمة" icon={ShoppingCart} tone="emerald" />
+        <StatCard label="تكلفة البضاعة" value={formatMoney(cogs)} hint="تكلفة الأصناف المباعة − استرداد مرتجع مربوط بفاتورة (الاستبدال مش داخل)" icon={Coins} tone="sky" />
         <StatCard label="المصروفات" value={formatMoney(expenses)} hint="مصروفات الفترة" icon={Wallet} tone="rose" />
-        <StatCard label="صافي الربح" value={<span className={net >= 0 ? 'text-emerald-700' : 'text-rose-600'}>{formatMoney(net)}</span>} hint={`مجمل ${formatMoney(gross)} · فرق الفواتير ${formatMoney(invoiceDiff)}`} icon={TrendingUp} tone={net >= 0 ? 'amber' : 'rose'} />
+        <StatCard label="صافي الربح" value={<span className={net >= 0 ? 'text-emerald-700' : 'text-rose-600'}>{formatMoney(net)}</span>} hint={`مجمل الربح ${formatMoney(gross)} = إيراد − تكلفة`} icon={TrendingUp} tone={net >= 0 ? 'amber' : 'rose'} />
       </StatGrid>
       <Card>
         <CardHeader title="تركيب الربح" subtitle={`هامش صافي ${(Number.isFinite(margin) ? margin : 0).toFixed(1)}% من الإيراد`} icon={Percent} />
@@ -184,6 +183,7 @@ type Profit = {
   expenses?: number;
   operatingProfit?: number;
   netProfit?: number;
+  invoiceDiff?: number;
   lines?: ProfitLine[];
 };
 
@@ -236,7 +236,29 @@ type ProductInsights = {
   unsoldValue: number;
 };
 
-type ReportTab = 'inventory' | 'sales' | 'purchases' | 'profit' | 'cash' | 'products';
+type ReportTab = 'inventory' | 'sales' | 'purchases' | 'profit' | 'cash' | 'products' | 'returns' | 'suppliers' | 'customers' | 'journal' | 'oldBatteries';
+
+type JournalRow = {
+  key: string; date: string; kind: string; group: string; reference: string | null; party: string | null; description: string;
+  value: number | null; cashIn: number; cashOut: number; goodsIn: number; goodsOut: number; accounts: string[]; products: string[];
+};
+type Journal = {
+  rows: JournalRow[];
+  totals: { cashIn: number; cashOut: number; cashNet: number; goodsIn: number; goodsOut: number; goodsNet: number; count: number };
+  byKind: { kind: string; count: number; cashIn: number; cashOut: number; goodsIn: number; goodsOut: number; value: number }[];
+};
+type OldReport = {
+  intake: { count: number; value: number; saleScrap: { count: number; value: number }; warrantySwap: { count: number; value: number }; warrantyWait: { count: number; value: number }; manual: { count: number; value: number } };
+  sorted: { count: number; scrap: number; used: number; warranty: number };
+  now: { toSort: number; scrapPile: number; scrapPileValue: number; scrapPileKg: number; usedInStock: number; warrantyInShop: number; warrantyWithSupplier: number; customerWaitingPickup: number; rejected: number };
+  warranty: { sent: number; replaced: number; shopReplaced: number; fees: number; replacementCost: number; delivered: number; pendingBySupplier: { supplier: string; count: number; oldestDays: number; shop: number; customer: number }[] };
+  scrapSales: { count: number; netKg: number; revenue: number; cost: number; profit: number; rows: { number: string; date: string; supplier: string; netKg: number; amount: number; batteries: number; cost: number; profit: number; settlement: string }[] };
+};
+
+const JOURNAL_GROUPS: [string, string][] = [
+  ['all', 'الكل'], ['sales', 'المبيعات والتحصيل'], ['purchases', 'المشتريات والسداد'], ['returns', 'المرتجعات'],
+  ['oldBatteries', 'البطاريات القديمة والضمان'], ['scrap', 'الخردة'], ['stock', 'المخزون'], ['cash', 'الخزنة'], ['expenses', 'المصروفات'],
+];
 type AppliedFilter = { all: boolean; ids: string[]; from: string; to: string };
 
 const TAB_LABEL: Record<ReportTab, string> = {
@@ -245,7 +267,12 @@ const TAB_LABEL: Record<ReportTab, string> = {
   purchases: 'المشتريات',
   profit: 'الأرباح',
   products: 'المنتجات',
+  returns: 'المرتجعات',
+  suppliers: 'الموردين',
+  customers: 'العملاء',
   cash: 'الخزنة',
+  journal: 'دفتر الحركة',
+  oldBatteries: 'البطاريات القديمة',
 };
 
 export function ReportsPage() {
@@ -256,7 +283,17 @@ export function ReportsPage() {
   const [sales, setSales] = useState<SalesReport | null>(null);
   const [purchases, setPurchases] = useState<PurchasesReport | null>(null);
   const [profit, setProfit] = useState<Profit | null>(null);
-  const [cash, setCash] = useState<{ totalIn: number; totalOut: number; net: number; transactions: { direction: string; amount: number; description: string; createdAt: string; account: { name: string } }[] } | null>(null);
+  const [cash, setCash] = useState<{
+    totalIn: number; totalOut: number; net: number; currentTotal?: number;
+    accounts?: { id: string; name: string; type: string; balance: number }[];
+    transactions: { direction: string; amount: number; description: string; createdAt: string; account: { name: string } }[];
+  } | null>(null);
+  const [returnsReport, setReturnsReport] = useState<{
+    salesReturns: any[]; purchaseReturns: any[];
+    salesCount: number; purchaseCount: number; salesTotal: number; purchaseTotal: number; restockedValue: number;
+  } | null>(null);
+  const [suppliersReport, setSuppliersReport] = useState<any[] | null>(null);
+  const [customersReport, setCustomersReport] = useState<any[] | null>(null);
   const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [allWarehouses, setAllWarehouses] = useState(false);
@@ -266,6 +303,16 @@ export function ReportsPage() {
   const [purchaseCols, setPurchaseCols] = useState({ supplier: true, date: true, total: true, status: true });
   const [products, setProducts] = useState<ProductInsights | null>(null);
   const ready = allWarehouses || picked.length > 0;
+  const partyTabs = tab === 'suppliers' || tab === 'customers' || tab === 'journal' || tab === 'oldBatteries';
+  const [journal, setJournal] = useState<Journal | null>(null);
+  const [journalGroup, setJournalGroup] = useState('all');
+  const [oldReport, setOldReport] = useState<OldReport | null>(null);
+  const journalRows = (journal?.rows || []).filter((r) => {
+    if (journalGroup !== 'all' && r.group !== journalGroup) return false;
+    const q = search.trim();
+    if (!q) return true;
+    return [r.kind, r.reference || '', r.party || '', r.description, ...r.products].some((x) => x.includes(q));
+  });
 
   const filteredInventory = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -296,6 +343,10 @@ export function ReportsPage() {
   async function load(next = applied, nextTab = tab) {
     if (!next) return;
     const suffix = queryFor(next, nextTab !== 'inventory');
+    const dateOnly = new URLSearchParams();
+    if (next.from) dateOnly.set('from', next.from);
+    if (next.to) dateOnly.set('to', next.to);
+    const dateQs = dateOnly.toString() ? `?${dateOnly}` : '';
     if (nextTab === 'inventory') {
       setInventory(await api<InventoryRow[]>(`/reports/inventory${suffix}`));
     } else if (nextTab === 'sales') {
@@ -306,6 +357,16 @@ export function ReportsPage() {
       setProfit(await api<Profit>(`/reports/profit${suffix}`));
     } else if (nextTab === 'cash') {
       setCash(await api(`/reports/cash${suffix}`));
+    } else if (nextTab === 'returns') {
+      setReturnsReport(await api(`/reports/returns${suffix}`));
+    } else if (nextTab === 'suppliers') {
+      setSuppliersReport(await api(`/reports/suppliers${dateQs}`));
+    } else if (nextTab === 'journal') {
+      setJournal(await api<Journal>(`/reports/journal${dateQs}`));
+    } else if (nextTab === 'oldBatteries') {
+      setOldReport(await api<OldReport>(`/reports/old-batteries${dateQs}`));
+    } else if (nextTab === 'customers') {
+      setCustomersReport(await api(`/reports/customers${dateQs}`));
     } else {
       setProducts(await api<ProductInsights>(`/reports/products${suffix}`));
     }
@@ -336,11 +397,19 @@ export function ReportsPage() {
     setFrom(range.from);
     setTo(range.to);
     localStorage.setItem('m5azen_report_range', JSON.stringify(range));
+    if (partyTabs) {
+      setApplied({ all: true, ids: [], from: range.from, to: range.to });
+      return;
+    }
     if (!ready) return;
     setApplied({ all: allWarehouses, ids: allWarehouses ? [] : picked, from: range.from, to: range.to });
   }
 
   function showReport() {
+    if (partyTabs) {
+      setApplied({ all: true, ids: [], from, to });
+      return;
+    }
     if (!ready) return;
     setApplied({ all: allWarehouses, ids: allWarehouses ? [] : picked, from, to });
   }
@@ -484,6 +553,24 @@ export function ReportsPage() {
         { header: 'قيمة المخزون', key: 'stockValue', width: 16 },
       ];
       products.unsold.forEach((row) => deadSheet.addRow(row));
+    } else if (tab === 'journal' && journal) {
+      ws.columns = [
+        { header: 'التاريخ', key: 'date', width: 14 },
+        { header: 'النوع', key: 'kind', width: 22 },
+        { header: 'المرجع', key: 'ref', width: 16 },
+        { header: 'الطرف', key: 'party', width: 22 },
+        { header: 'التفاصيل', key: 'desc', width: 40 },
+        { header: 'القيمة', key: 'value', width: 12 },
+        { header: 'فلوس داخلة', key: 'cin', width: 12 },
+        { header: 'فلوس خارجة', key: 'cout', width: 12 },
+        { header: 'بضاعة داخلة', key: 'gin', width: 12 },
+        { header: 'بضاعة خارجة', key: 'gout', width: 12 },
+        { header: 'الأصناف', key: 'products', width: 40 },
+      ];
+      journalRows.forEach((r) => ws.addRow({
+        date: formatDate(r.date), kind: r.kind, ref: r.reference || '', party: r.party || '', desc: r.description,
+        value: r.value ?? '', cin: r.cashIn || '', cout: r.cashOut || '', gin: r.goodsIn || '', gout: r.goodsOut || '', products: r.products.join(' · '),
+      }));
     } else if (tab === 'cash' && cash) {
       ws.columns = [
         { header: 'التاريخ', key: 'date', width: 14 },
@@ -515,7 +602,7 @@ export function ReportsPage() {
     <div>
       <PageHeader
         title="التقارير"
-        subtitle="اختار المخزن أو المخازن، وبعدين اعرض تقرير المخزون أو المبيعات أو المشتريات أو الأرباح أو الخزنة"
+        subtitle="مخزون، مبيعات، مشتريات، منتجات، مرتجعات، موردين، عملاء، أرباح، وخزنة — حسب المدة والمخزن"
         actions={
           <>
             <SearchBox value={search} onChange={setSearch} placeholder="بحث في التقرير..." />
@@ -534,10 +621,15 @@ export function ReportsPage() {
           ['sales', 'المبيعات', ShoppingCart],
           ['purchases', 'المشتريات', Truck],
           ['products', 'المنتجات', Package],
+          ['returns', 'المرتجعات', Undo2],
+          ['suppliers', 'الموردين', Truck],
+          ['customers', 'العملاء', Users],
+          ['journal', 'دفتر الحركة', FileSpreadsheet],
+          ['oldBatteries', 'البطاريات القديمة', Redo2],
           ['profit', 'الأرباح', TrendingUp],
           ['cash', 'الخزنة', Wallet],
         ] as const).map(([k, label, Icon]) => (
-          <button key={k} type="button" onClick={() => setTab(k)} className={`flex h-11 min-w-[140px] flex-1 items-center justify-center gap-2 rounded-xl text-[13px] font-bold transition ${tab === k ? 'bg-gradient-to-br from-brand-600 to-brand-800 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'}`}>
+          <button key={k} type="button" onClick={() => setTab(k)} className={`flex h-11 min-w-[120px] flex-1 items-center justify-center gap-2 rounded-xl text-[13px] font-bold transition ${tab === k ? 'bg-gradient-to-br from-brand-600 to-brand-800 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'}`}>
             <Icon size={16} /> {label}
           </button>
         ))}
@@ -545,6 +637,7 @@ export function ReportsPage() {
 
       <Card className="mb-5 !p-3 no-print">
         <div className="space-y-3">
+          {!partyTabs && (
           <div>
             <Label>المخازن</Label>
             <div className="mt-1 flex flex-wrap gap-2">
@@ -588,6 +681,7 @@ export function ReportsPage() {
               })}
             </div>
           </div>
+          )}
           {tab !== 'inventory' && (
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex rounded-xl bg-slate-100 p-1">
@@ -599,13 +693,18 @@ export function ReportsPage() {
               <div className="w-40"><Label>إلى تاريخ</Label><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></div>
             </div>
           )}
-          <Button onClick={showReport} disabled={!ready}>عرض التقرير</Button>
+          <Button onClick={showReport} disabled={!partyTabs && !ready}>عرض التقرير</Button>
         </div>
       </Card>
 
       {!applied && (
         <Card>
-          <Empty text="التقرير لسه مش ظاهر" hint="اختار مخزن واحد أو أكتر، أو كل المخازن، وبعدين اضغط عرض التقرير" />
+          <Empty
+            text="التقرير لسه مش ظاهر"
+            hint={partyTabs
+              ? 'اختار المدة (اختياري) وبعدين اضغط عرض التقرير'
+              : 'اختار مخزن واحد أو أكتر، أو كل المخازن، وبعدين اضغط عرض التقرير'}
+          />
         </Card>
       )}
 
@@ -928,22 +1027,286 @@ export function ReportsPage() {
           revenue={profit.revenue ?? profit.salesTotal}
           cogs={profit.cogs || 0}
           expenses={profit.expenses || 0}
-          gross={profit.operatingProfit ?? ((profit.revenue ?? profit.salesTotal) - (profit.cogs || 0))}
-          net={profit.netProfit ?? profit.grossProfit}
-          invoiceDiff={profit.grossProfit}
+          gross={profit.operatingProfit ?? profit.grossProfit ?? ((profit.revenue ?? profit.salesTotal) - (profit.cogs || 0))}
+          net={profit.netProfit ?? ((profit.revenue || 0) - (profit.cogs || 0) - (profit.expenses || 0))}
+          invoiceDiff={profit.invoiceDiff ?? (profit.salesTotal - profit.purchasesTotal)}
           lines={profit.lines || []}
         />
+      )}
+
+      {applied && tab === 'returns' && returnsReport && (
+        <>
+          <StatGrid cols={4}>
+            <StatCard label="مرتجعات بيع" value={formatMoney(returnsReport.salesTotal)} hint={`${returnsReport.salesCount} مرتجع`} icon={Undo2} tone="rose" />
+            <StatCard label="مرتجعات شراء" value={formatMoney(returnsReport.purchaseTotal)} hint={`${returnsReport.purchaseCount} مرتجع`} icon={Redo2} tone="sky" />
+            <StatCard label="استلام بديل" value={formatMoney(returnsReport.restockedValue)} hint="قيمة الكميات المستلمة بدل المرتجع" icon={Package} tone="emerald" />
+            <StatCard label="صافي مرتجع الشراء" value={formatMoney(returnsReport.purchaseTotal - returnsReport.restockedValue)} hint="مرتجع شراء − استلام بديل" icon={Coins} tone="amber" />
+          </StatGrid>
+          <Card>
+            <CardHeader title="مرتجعات البيع" subtitle={`${returnsReport.salesCount} حركة`} icon={Undo2} />
+            {returnsReport.salesReturns.length === 0 ? <Empty /> : (
+              <Table>
+                <thead><tr><Th>الرقم</Th><Th>العميل</Th><Th>المخزن</Th><Th>التاريخ</Th><Th>الأصناف</Th><Th>الإجمالي</Th></tr></thead>
+                <tbody>
+                  {returnsReport.salesReturns.map((r: any) => (
+                    <tr key={r.id}>
+                      <Td><span className="font-mono text-xs font-bold" dir="ltr">{r.number}</span></Td>
+                      <Td>{r.customerName || r.customer?.name || '—'}</Td>
+                      <Td>{r.warehouse?.name}</Td>
+                      <Td>{formatDate(r.returnDate)}</Td>
+                      <Td>{r.lines?.map((l: any) => l.product?.name).filter(Boolean).join(' · ') || '—'}</Td>
+                      <Td className="font-bold">{formatMoney(r.consumptionAmount || r.total || 0)}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            )}
+          </Card>
+          <Card>
+            <CardHeader title="مرتجعات الشراء" subtitle={`${returnsReport.purchaseCount} حركة`} icon={Redo2} />
+            {returnsReport.purchaseReturns.length === 0 ? <Empty /> : (
+              <Table>
+                <thead><tr><Th>الرقم</Th><Th>المورد</Th><Th>المخزن</Th><Th>التاريخ</Th><Th>الأصناف</Th><Th>الإجمالي</Th><Th>مستلم بديل</Th></tr></thead>
+                <tbody>
+                  {returnsReport.purchaseReturns.map((r: any) => (
+                    <tr key={r.id}>
+                      <Td><span className="font-mono text-xs font-bold" dir="ltr">{r.number}</span></Td>
+                      <Td>{r.supplier?.name}</Td>
+                      <Td>{r.warehouse?.name}</Td>
+                      <Td>{formatDate(r.returnDate)}</Td>
+                      <Td>{r.lines?.map((l: any) => `${l.product?.name} (${l.quantity})`).join(' · ')}</Td>
+                      <Td className="font-bold">{formatMoney(r.total)}</Td>
+                      <Td>{r.lines?.reduce((s: number, l: any) => s + (l.restockedQty || 0), 0) || 0}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            )}
+          </Card>
+        </>
+      )}
+
+      {applied && tab === 'suppliers' && suppliersReport && (
+        <Card>
+          <CardHeader title="حركة الموردين في الفترة" subtitle={`${suppliersReport.length} مورد · التفاصيل من صفحة الموردين ← كشف حساب`} icon={Truck} />
+          <Table>
+            <thead><tr><Th>الكود</Th><Th>المورد</Th><Th>مشتريات</Th><Th>سداد</Th><Th>مرتجعات</Th><Th>استلام بديل</Th><Th>خردة مبيعة</Th><Th>فواتير</Th><Th>الرصيد الحالي</Th></tr></thead>
+            <tbody>
+              {suppliersReport.filter((r) => !search.trim() || r.name.includes(search) || r.code.includes(search)).map((r) => (
+                <tr key={r.id}>
+                  <Td className="font-mono text-xs"><span dir="ltr">{r.code}</span></Td>
+                  <Td className="font-bold">{r.name}</Td>
+                  <Td className="tabular-nums">{formatMoney(r.purchased)}</Td>
+                  <Td className="tabular-nums text-emerald-700">{formatMoney(r.paid)}</Td>
+                  <Td className="tabular-nums text-sky-700">{formatMoney(r.returned)}</Td>
+                  <Td className="tabular-nums text-amber-700">{formatMoney(r.restocked || 0)}</Td>
+                  <Td className="tabular-nums text-emerald-700">{formatMoney(r.scrapSold || 0)}</Td>
+                  <Td>{r.invoiceCount}</Td>
+                  <Td className="font-extrabold">{formatMoney(r.balance)}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </Card>
+      )}
+
+      {applied && tab === 'customers' && customersReport && (
+        <Card>
+          <CardHeader title="حركة العملاء في الفترة" subtitle={`${customersReport.length} عميل · التفاصيل من صفحة العملاء ← كشف حساب`} icon={Users} />
+          <Table>
+            <thead><tr><Th>الكود</Th><Th>العميل</Th><Th>مبيعات</Th><Th>تحصيل</Th><Th>مرتجعات</Th><Th>فواتير</Th><Th>الرصيد الحالي</Th></tr></thead>
+            <tbody>
+              {customersReport.filter((r) => !search.trim() || r.name.includes(search) || r.code.includes(search)).map((r) => (
+                <tr key={r.id}>
+                  <Td className="font-mono text-xs"><span dir="ltr">{r.code}</span></Td>
+                  <Td className="font-bold">{r.name}</Td>
+                  <Td className="tabular-nums">{formatMoney(r.sold)}</Td>
+                  <Td className="tabular-nums text-emerald-700">{formatMoney(r.received)}</Td>
+                  <Td className="tabular-nums text-rose-700">{formatMoney(r.returned)}</Td>
+                  <Td>{r.invoiceCount}</Td>
+                  <Td className="font-extrabold">{formatMoney(r.balance)}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </Card>
+      )}
+
+      {applied && tab === 'journal' && journal && (
+        <>
+          <StatGrid cols={4}>
+            <StatCard label="فلوس داخلة" value={<span className="text-emerald-700">{formatMoney(journal.totals.cashIn)}</span>} icon={ArrowDownLeft} tone="emerald" />
+            <StatCard label="فلوس خارجة" value={<span className="text-rose-600">{formatMoney(journal.totals.cashOut)}</span>} icon={ArrowUpRight} tone="rose" />
+            <StatCard label="صافي الفلوس" value={formatMoney(journal.totals.cashNet)} icon={Wallet} tone="brand" />
+            <StatCard label="بضاعة داخلة / خارجة" value={`${journal.totals.goodsIn} / ${journal.totals.goodsOut}`} hint={`${journal.totals.count} حركة`} icon={Boxes} tone="sky" />
+          </StatGrid>
+          <Card>
+            <CardHeader title="ملخص حسب النوع" subtitle="كل نوع عمليات اتعمل كام مرة وأثره" icon={FileSpreadsheet} />
+            <Table>
+              <thead><tr><Th>النوع</Th><Th>العدد</Th><Th>القيمة</Th><Th>فلوس داخلة</Th><Th>فلوس خارجة</Th><Th>بضاعة داخلة</Th><Th>بضاعة خارجة</Th></tr></thead>
+              <tbody>
+                {journal.byKind.map((k) => (
+                  <tr key={k.kind}>
+                    <Td className="font-bold">{k.kind}</Td>
+                    <Td>{k.count}</Td>
+                    <Td className="tabular-nums">{k.value ? formatMoney(k.value) : '—'}</Td>
+                    <Td className="tabular-nums text-emerald-700">{k.cashIn ? formatMoney(k.cashIn) : '—'}</Td>
+                    <Td className="tabular-nums text-rose-600">{k.cashOut ? formatMoney(k.cashOut) : '—'}</Td>
+                    <Td className="tabular-nums">{k.goodsIn || '—'}</Td>
+                    <Td className="tabular-nums">{k.goodsOut || '—'}</Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </Card>
+          <Card>
+            <CardHeader
+              title="كل الحركات بالترتيب"
+              subtitle={`${journalRows.length} حركة`}
+              icon={CalendarIcon}
+              actions={(
+                <div className="flex flex-wrap gap-1">
+                  {JOURNAL_GROUPS.map(([key, label]) => (
+                    <button key={key} type="button" onClick={() => setJournalGroup(key)} className={`rounded-lg px-2.5 py-1 text-xs font-bold ${journalGroup === key ? 'bg-brand-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            />
+            {journalRows.length === 0 ? <Empty text="مفيش حركات" /> : (
+              <Table>
+                <thead><tr><Th>التاريخ</Th><Th>النوع</Th><Th>المرجع</Th><Th>الطرف</Th><Th>التفاصيل</Th><Th>القيمة</Th><Th>فلوس داخلة</Th><Th>فلوس خارجة</Th><Th>بضاعة</Th></tr></thead>
+                <tbody>
+                  {journalRows.map((r) => (
+                    <tr key={r.key}>
+                      <Td className="whitespace-nowrap text-slate-500">{formatDate(r.date)}</Td>
+                      <Td><Badge tone={r.cashIn > 0 ? 'emerald' : r.cashOut > 0 ? 'rose' : 'slate'}>{r.kind}</Badge></Td>
+                      <Td><span className="font-mono text-xs font-bold" dir="ltr">{r.reference || '—'}</span></Td>
+                      <Td>{r.party || '—'}</Td>
+                      <Td className="max-w-sm text-xs text-slate-600">
+                        {r.description}
+                        {r.products.length > 0 && <div className="mt-0.5 text-muted">{r.products.join(' · ')}</div>}
+                        {r.accounts.length > 0 && <div className="mt-0.5 text-muted">{r.accounts.join('، ')}</div>}
+                      </Td>
+                      <Td className="tabular-nums">{r.value != null ? formatMoney(r.value) : '—'}</Td>
+                      <Td className="tabular-nums font-bold text-emerald-700">{r.cashIn ? formatMoney(r.cashIn) : ''}</Td>
+                      <Td className="tabular-nums font-bold text-rose-600">{r.cashOut ? formatMoney(r.cashOut) : ''}</Td>
+                      <Td className="whitespace-nowrap tabular-nums text-xs">
+                        {r.goodsIn ? <span className="text-emerald-700">+{r.goodsIn}</span> : null}
+                        {r.goodsIn && r.goodsOut ? ' / ' : null}
+                        {r.goodsOut ? <span className="text-rose-600">−{r.goodsOut}</span> : null}
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            )}
+          </Card>
+        </>
+      )}
+
+      {applied && tab === 'oldBatteries' && oldReport && (
+        <>
+          <StatGrid cols={4}>
+            <StatCard label="بطاريات قديمة دخلت" value={oldReport.intake.count} hint={`قيمتها ${formatMoney(oldReport.intake.value)}`} icon={Undo2} tone="brand" />
+            <StatCard label="اتفرزت" value={oldReport.sorted.count} hint={`خردة ${oldReport.sorted.scrap} · مستعمل ${oldReport.sorted.used} · ضمان ${oldReport.sorted.warranty}`} icon={Package} tone="sky" />
+            <StatCard label="بدائل ضمان وصلت" value={oldReport.warranty.replaced} hint={`استهلاك ${formatMoney(oldReport.warranty.fees)} · تكلفة بدائل المحل ${formatMoney(oldReport.warranty.replacementCost)}`} icon={Truck} tone="emerald" />
+            <StatCard label="ربح بيع الخردة" value={<span className={oldReport.scrapSales.profit >= 0 ? 'text-emerald-700' : 'text-rose-600'}>{formatMoney(oldReport.scrapSales.profit)}</span>} hint={`${oldReport.scrapSales.netKg} كجم بـ ${formatMoney(oldReport.scrapSales.revenue)} − تكلفة ${formatMoney(oldReport.scrapSales.cost)}`} icon={Coins} tone="amber" />
+          </StatGrid>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader title="دخلت منين" subtitle="في الفترة" icon={Undo2} />
+              <Table>
+                <thead><tr><Th>المصدر</Th><Th>العدد</Th><Th>القيمة</Th></tr></thead>
+                <tbody>
+                  {([['خردة من فواتير البيع', oldReport.intake.saleScrap], ['ضمان — الزبون دفع فرق', oldReport.intake.warrantySwap], ['ضمان زبون مستني', oldReport.intake.warrantyWait], ['إدخال يدوي', oldReport.intake.manual]] as const).map(([label, v]) => (
+                    <tr key={label}><Td>{label}</Td><Td>{v.count}</Td><Td>{formatMoney(v.value)}</Td></tr>
+                  ))}
+                </tbody>
+              </Table>
+            </Card>
+            <Card>
+              <CardHeader title="الوضع دلوقتي" subtitle="بغض النظر عن الفترة" icon={Boxes} />
+              <Table>
+                <tbody>
+                  <tr><Td>مستنية الفرز</Td><Td className="font-bold">{oldReport.now.toSort}</Td></tr>
+                  <tr><Td>كوم الخردة</Td><Td className="font-bold">{oldReport.now.scrapPile} بطارية · {oldReport.now.scrapPileKg} كجم · {formatMoney(oldReport.now.scrapPileValue)}</Td></tr>
+                  <tr><Td>اتفرزت مستعمل/سيرفس</Td><Td className="font-bold">{oldReport.now.usedInStock}</Td></tr>
+                  <tr><Td>ضمان في المحل لسه متبعتش</Td><Td className="font-bold">{oldReport.now.warrantyInShop}</Td></tr>
+                  <tr><Td>ضمان عند الموردين (البديل لسه موصلش)</Td><Td className="font-bold">{oldReport.now.warrantyWithSupplier}</Td></tr>
+                  <tr><Td>زباين البديل بتاعهم وصل ومستنيين يستلموا</Td><Td className="font-bold">{oldReport.now.customerWaitingPickup}</Td></tr>
+                  <tr><Td>المورد رفضها</Td><Td className="font-bold">{oldReport.now.rejected}</Td></tr>
+                </tbody>
+              </Table>
+            </Card>
+          </div>
+          <Card>
+            <CardHeader title="الضمان عند الموردين" subtitle="البديل لسه موصلش — مرتب بالأقدم" icon={Truck} />
+            {oldReport.warranty.pendingBySupplier.length === 0 ? <Empty text="مفيش حاجة عند الموردين" /> : (
+              <Table>
+                <thead><tr><Th>المورد</Th><Th>العدد</Th><Th>ملك المحل</Th><Th>ملك زباين</Th><Th>أقدم واحدة من</Th></tr></thead>
+                <tbody>
+                  {oldReport.warranty.pendingBySupplier.map((r) => (
+                    <tr key={r.supplier}><Td className="font-bold">{r.supplier}</Td><Td>{r.count}</Td><Td>{r.shop}</Td><Td>{r.customer}</Td><Td>{r.oldestDays} يوم</Td></tr>
+                  ))}
+                </tbody>
+              </Table>
+            )}
+          </Card>
+          <Card>
+            <CardHeader title="مبيعات الخردة" subtitle={`${oldReport.scrapSales.count} بيعة`} icon={Coins} />
+            {oldReport.scrapSales.rows.length === 0 ? <Empty text="مفيش مبيعات خردة في الفترة" /> : (
+              <Table>
+                <thead><tr><Th>الرقم</Th><Th>التاريخ</Th><Th>المورد</Th><Th>الوزن الصافي</Th><Th>البيع</Th><Th>بطاريات</Th><Th>التكلفة</Th><Th>الربح</Th></tr></thead>
+                <tbody>
+                  {oldReport.scrapSales.rows.map((r) => (
+                    <tr key={r.number}>
+                      <Td><span className="font-mono text-xs font-bold" dir="ltr">{r.number}</span></Td>
+                      <Td>{formatDate(r.date)}</Td>
+                      <Td>{r.supplier}</Td>
+                      <Td>{r.netKg} كجم</Td>
+                      <Td>{formatMoney(r.amount)}</Td>
+                      <Td>{r.batteries}</Td>
+                      <Td>{formatMoney(r.cost)}</Td>
+                      <Td className={`font-bold ${r.profit >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>{formatMoney(r.profit)}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            )}
+          </Card>
+        </>
       )}
 
       {applied && tab === 'cash' && cash && (
         <>
         {!applied.all && <p className="mb-3 text-sm text-slate-500">الحركات هنا هي التحصيل والسداد المرتبطين بفواتير المخازن المختارة.</p>}
-        <StatGrid cols={3}>
-          <StatCard label="وارد" value={<span className="text-emerald-700">{formatMoney(cash.totalIn)}</span>} icon={ArrowDownLeft} tone="emerald" />
-          <StatCard label="صادر" value={<span className="text-rose-600">{formatMoney(cash.totalOut)}</span>} icon={ArrowUpRight} tone="rose" />
-          <StatCard label="صافي الحركة" value={formatMoney(cash.net)} hint={`${cash.transactions.length} حركة`} icon={Wallet} tone="brand" />
+        <StatGrid cols={4}>
+          <StatCard label="الرصيد الحالي" value={formatMoney(cash.currentTotal || 0)} hint="مجموع كل حسابات الخزنة" icon={Wallet} tone="brand" />
+          <StatCard label="وارد الفترة" value={<span className="text-emerald-700">{formatMoney(cash.totalIn)}</span>} icon={ArrowDownLeft} tone="emerald" />
+          <StatCard label="صادر الفترة" value={<span className="text-rose-600">{formatMoney(cash.totalOut)}</span>} icon={ArrowUpRight} tone="rose" />
+          <StatCard label="صافي الحركة" value={formatMoney(cash.net)} hint={`${cash.transactions.length} حركة`} icon={Coins} tone="amber" />
         </StatGrid>
+        {!!cash.accounts?.length && (
+          <Card>
+            <CardHeader title="توزيع أرصدة الخزنة الآن" subtitle={`${cash.accounts.length} حساب`} icon={Wallet} />
+            <Table>
+              <thead><tr><Th>الحساب</Th><Th>النوع</Th><Th>الرصيد</Th></tr></thead>
+              <tbody>
+                {cash.accounts.map((a) => (
+                  <tr key={a.id}>
+                    <Td className="font-bold">{a.name}</Td>
+                    <Td className="text-muted">{a.type === 'BANK' ? 'بنك' : 'نقدي'}</Td>
+                    <Td className="font-extrabold tabular-nums">{formatMoney(a.balance)}</Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </Card>
+        )}
         <Card>
+          <CardHeader title="حركات الفترة" subtitle="دخل وخرج" icon={ArrowDownLeft} />
           <Table>
             <thead>
               <tr>

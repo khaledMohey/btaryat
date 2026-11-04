@@ -59,14 +59,19 @@ export class CustomersController {
     return this.service.findAll({ search, page, pageSize, balance, warehouseIds });
   }
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.service.findOne(id);
+  @Get('movements/:kind/:id')
+  movementDetail(@Param('kind') kind: string, @Param('id') id: string) {
+    return this.service.movementDetail(kind, id);
   }
 
   @Get(':id/statement')
   statement(@Param('id') id: string) {
     return this.service.statement(id);
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.service.findOne(id);
   }
 
   @Get(':id/prices')

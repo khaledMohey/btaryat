@@ -101,6 +101,7 @@ export class ProductsService {
             { sku: { contains: query.search } },
             { barcode: { contains: query.search } },
             { brand: { contains: query.search } },
+            { batterySize: { contains: query.search } },
           ],
         }
       : undefined;
@@ -160,8 +161,18 @@ export class ProductsService {
     return product;
   }
 
+  async nextSku() {
+    const products = await this.prisma.product.findMany({ select: { sku: true } });
+    let max = 0;
+    for (const product of products) {
+      const match = product.sku.match(/(\d+)\s*$/);
+      if (match) max = Math.max(max, Number(match[1]));
+    }
+    return `SKU-${String(max + 1).padStart(4, '0')}`;
+  }
+
   async create(data: {
-    sku: string;
+    sku?: string;
     name: string;
     unit?: string;
     costPrice?: number;
@@ -170,6 +181,7 @@ export class ProductsService {
     description?: string;
     barcode?: string | null;
     brand?: string | null;
+    batterySize?: string | null;
     categoryId?: string | null;
     wholesalePrice?: number;
     packUnit?: string | null;
@@ -177,9 +189,11 @@ export class ProductsService {
     fieldValues?: { fieldId: string; value: string }[];
     warehouseIds?: string[];
   }) {
-    const { fieldValues, warehouseIds, ...rest } = data;
+    const { fieldValues, warehouseIds, sku: rawSku, ...rest } = data;
+    const sku = rawSku?.trim() || (await this.nextSku());
     rest.barcode = rest.barcode?.trim() || null;
     rest.brand = rest.brand?.trim() || null;
+    rest.batterySize = rest.batterySize?.trim() || null;
     rest.categoryId = rest.categoryId || null;
     rest.packUnit = rest.packUnit?.trim() || null;
     const cleaned = (fieldValues || []).filter((fv) => fv.value?.trim());
@@ -187,6 +201,7 @@ export class ProductsService {
     return this.prisma.product.create({
       data: {
         ...rest,
+        sku,
         fieldValues: cleaned.length ? { create: cleaned } : undefined,
         warehouses: uniqueWarehouses.length
           ? { create: uniqueWarehouses.map((warehouseId) => ({ warehouseId })) }
@@ -208,6 +223,7 @@ export class ProductsService {
       isActive?: boolean;
       barcode?: string | null;
       brand?: string | null;
+      batterySize?: string | null;
       categoryId?: string | null;
       wholesalePrice?: number;
       packUnit?: string | null;
@@ -219,6 +235,7 @@ export class ProductsService {
     const { fieldValues, warehouseIds, ...rest } = data;
     if (rest.barcode !== undefined) rest.barcode = rest.barcode?.trim() || null;
     if (rest.brand !== undefined) rest.brand = rest.brand?.trim() || null;
+    if (rest.batterySize !== undefined) rest.batterySize = rest.batterySize?.trim() || null;
     if (rest.categoryId !== undefined) rest.categoryId = rest.categoryId || null;
     if (rest.packUnit !== undefined) rest.packUnit = rest.packUnit?.trim() || null;
     if (fieldValues) {

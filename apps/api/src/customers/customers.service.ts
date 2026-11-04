@@ -184,6 +184,8 @@ export class CustomersService implements OnModuleInit {
       credit: number;
       method?: string | null;
       note?: string | null;
+      kind: 'sale' | 'receipt' | 'sales_return' | 'discount';
+      id: string;
     };
     const rows: Row[] = [];
     for (const s of sales) {
@@ -194,7 +196,9 @@ export class CustomersService implements OnModuleInit {
         debit: s.subtotal + s.tax,
         credit: 0,
         method: methodName(s.paymentMethod),
-        note: s.notes,
+        note: [s.notes, s.scrapAmount > 0 ? `+ استلام خردة ${s.scrapKg} كجم بقيمة ${s.scrapAmount} (مش مطلوبة من العميل)` : null].filter(Boolean).join(' — ') || null,
+        kind: 'sale',
+        id: s.id,
       });
       if (s.discount > 0.009) {
         rows.push({
@@ -204,6 +208,8 @@ export class CustomersService implements OnModuleInit {
           debit: 0,
           credit: s.discount,
           note: 'يُخصم من إيراد الفاتورة ومن الربح',
+          kind: 'discount',
+          id: s.id,
         });
       }
     }
@@ -216,6 +222,8 @@ export class CustomersService implements OnModuleInit {
         credit: r.amount,
         method: methodName(r.paymentMethod),
         note: [r.note, r.referenceNo ? `مرجع: ${r.referenceNo}` : null].filter(Boolean).join(' — ') || null,
+        kind: 'receipt',
+        id: r.id,
       });
     }
     for (const r of returns) {
@@ -224,16 +232,62 @@ export class CustomersService implements OnModuleInit {
         type: 'مرتجع بيع',
         ref: r.number,
         debit: 0,
-        credit: r.total,
+        credit: r.consumptionAmount || r.total,
         note: r.notes,
+        kind: 'sales_return',
+        id: r.id,
       });
     }
     rows.sort((a, b) => a.date.getTime() - b.date.getTime());
     let running = 0;
     const statement = rows.map((r) => {
       running += r.debit - r.credit;
-      return { ...r, balance: running };
+      return { ...r, balance: Math.round(running * 100) / 100 };
     });
     return { customer, statement, balance: customer.balance };
+  }
+
+  async movementDetail(kind: string, id: string) {
+    if (kind === 'sale' || kind === 'discount') {
+      const row = await this.prisma.salesInvoice.findUnique({
+        where: { id },
+        include: {
+          customer: true,
+          warehouse: true,
+          lines: { include: { product: true } },
+          receipts: true,
+        },
+      });
+      if (!row) throw new NotFoundException('الفاتورة غير موجودة');
+      return { kind, row };
+    }
+    if (kind === 'receipt') {
+      const row = await this.prisma.receipt.findUnique({
+        where: { id },
+        include: {
+          customer: true,
+          cashAccount: true,
+          salesInvoice: true,
+        },
+      });
+      if (!row) throw new NotFoundException('التحصيل غير موجود');
+      return { kind, row };
+    }
+    if (kind === 'sales_return') {
+      const row = await this.prisma.salesReturn.findUnique({
+        where: { id },
+        include: {
+          customer: true,
+          warehouse: true,
+          cashAccount: true,
+          replacementProduct: true,
+          replacementWarehouse: true,
+          lines: { include: { product: true } },
+        },
+      });
+      if (!row) throw new NotFoundException('مرتجع البيع غير موجود');
+      return { kind, row };
+    }
+    throw new NotFoundException('نوع الحركة غير معروف');
   }
 }

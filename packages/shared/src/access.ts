@@ -8,7 +8,6 @@ export type PageId =
   | 'sales'
   | 'purchases'
   | 'returns'
-  | 'documents'
   | 'cash'
   | 'finance'
   | 'reports'
@@ -157,17 +156,6 @@ export const PAGES: PageDef[] = [
     fields: [{ id: 'cost', label: 'التكلفة' }],
   },
   {
-    id: 'documents',
-    label: 'عروض وأوامر',
-    group: 'العمليات',
-    actions: [
-      { id: 'create', label: 'إضافة' },
-      { id: 'edit', label: 'تعديل' },
-      { id: 'delete', label: 'حذف' },
-    ],
-    fields: [],
-  },
-  {
     id: 'cash',
     label: 'الخزنة',
     group: 'العمليات',
@@ -243,7 +231,7 @@ export const PAGES: PageDef[] = [
 ];
 
 const FIELD_KEYS: Record<string, string[]> = {
-  cost: ['costPrice', 'unitCost'],
+  cost: ['costPrice', 'unitCost', 'totalCost'],
   profit: ['profit', 'netProfit', 'grossProfit', 'margin', 'cogs', 'monthProfit'],
   cash: ['cashBalance'],
   balances: ['balance'],
@@ -297,7 +285,6 @@ export function templateFor(role: string): AccessMap {
       sales: grant(true, ['create', 'edit', 'delete', 'confirm', 'export'], ['paid']),
       purchases: off,
       returns: grant(true, ['create'], []),
-      documents: grant(true, ['create', 'edit'], []),
       cash: grant(true, ['receipt'], []),
       finance: off,
       reports: off,
@@ -318,9 +305,8 @@ export function templateFor(role: string): AccessMap {
     customers: off,
     sales: off,
     purchases: grant(true, ['create', 'edit', 'delete', 'confirm', 'export'], ['cost', 'paid']),
-    returns: grant(true, ['create'], ['cost']),
-    documents: grant(true, ['create', 'edit'], []),
-    cash: off,
+      returns: grant(true, ['create'], ['cost']),
+      cash: off,
     finance: off,
     reports: off,
     reportBuilder: off,

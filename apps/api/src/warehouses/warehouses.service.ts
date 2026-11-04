@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isReturnsWarehouse } from '../common/returns-warehouse';
 
 @Injectable()
 export class WarehousesService {
@@ -47,6 +48,9 @@ export class WarehousesService {
     const name = data.name.trim();
     if (!code) throw new BadRequestException('كود المخزن مطلوب');
     if (name.length < 2) throw new BadRequestException('اسم المخزن قصير');
+    if (isReturnsWarehouse({ code, name })) {
+      throw new BadRequestException('مخزن المرتجعات ثابت في السيستم ولا يمكن إنشاؤه يدويًا');
+    }
     const taken = await this.prisma.warehouse.findUnique({ where: { code } });
     if (taken) throw new BadRequestException('كود المخزن مستخدم');
     return this.prisma.warehouse.create({
@@ -59,6 +63,9 @@ export class WarehousesService {
     data: Partial<{ code: string; name: string; location: string; description: string; isActive: boolean }>,
   ) {
     const current = await this.findOne(id);
+    if (isReturnsWarehouse(current)) {
+      throw new BadRequestException('مخزن المرتجعات ثابت ولا يمكن تعديله');
+    }
     const code = data.code?.trim();
     const name = data.name?.trim();
     if (code === '') throw new BadRequestException('كود المخزن مطلوب');
@@ -66,6 +73,9 @@ export class WarehousesService {
     if (code && code !== current.code) {
       const taken = await this.prisma.warehouse.findUnique({ where: { code } });
       if (taken) throw new BadRequestException('كود المخزن مستخدم');
+    }
+    if (isReturnsWarehouse({ code: code ?? current.code, name: name ?? current.name })) {
+      throw new BadRequestException('لا يمكن تحويل مخزن إلى مخزن المرتجعات');
     }
     return this.prisma.warehouse.update({
       where: { id },
@@ -80,6 +90,10 @@ export class WarehousesService {
   }
 
   async remove(id: string) {
+    const current = await this.findOne(id);
+    if (isReturnsWarehouse(current)) {
+      throw new BadRequestException('مخزن المرتجعات ثابت ولا يمكن حذفه');
+    }
     const balances = await this.prisma.stockBalance.count({
       where: { warehouseId: id, quantity: { not: 0 } },
     });

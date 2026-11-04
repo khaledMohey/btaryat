@@ -1,22 +1,39 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InvoiceStatus, StockMovementType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SequenceService } from '../common/sequence.service';
 import { assertPeriodsOpen } from '../settings/period-lock';
 import { pageResult, readPage } from '../common/paging';
-
+import { FifoLayer, recostAll, recostProducts, replayFifo } from '../common/fifo';
 const CONFIRMED: InvoiceStatus[] = [
   InvoiceStatus.CONFIRMED,
   InvoiceStatus.PARTIAL,
   InvoiceStatus.PAID,
 ];
 
+const FIFO_VERSION = '1';
+
 @Injectable()
-export class StockService {
+export class StockService implements OnModuleInit {
   constructor(
     private prisma: PrismaService,
     private sequence: SequenceService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      const row = await this.prisma.setting.findUnique({ where: { key: 'fifo_version' } });
+      if (row?.value === FIFO_VERSION) return;
+      await recostAll(this.prisma);
+      await this.prisma.setting.upsert({
+        where: { key: 'fifo_version' },
+        create: { key: 'fifo_version', value: FIFO_VERSION },
+        update: { value: FIFO_VERSION },
+      });
+    } catch (error) {
+      console.error('FIFO initial recost failed', error);
+    }
+  }
 
   balances(warehouseId?: string, search?: string, warehouseIds?: string[] | null) {
     const scopeIds = warehouseId ? [warehouseId] : warehouseIds || undefined;
@@ -101,9 +118,18 @@ export class StockService {
       batchesByKey.set(key, list);
     }
 
+    const replay = await replayFifo(this.prisma, productIds);
+
     const items = balances.map((b) => {
-      const unitCost = b.product.costPrice || 0;
-      const totalCost = Math.round(b.quantity * unitCost * 100) / 100;
+      const open = (replay.get(b.productId)?.layers || [])
+        .filter((l) => l.warehouseId === b.warehouseId && l.remaining > 0.0001);
+      const fifoQty = open.reduce((s, l) => s + l.remaining, 0);
+      const fifoValue = open.reduce((s, l) => s + l.remaining * l.unitCost, 0);
+      const uncovered = Math.max(0, b.quantity - fifoQty);
+      const totalCost = Math.round((fifoValue + uncovered * (b.product.costPrice || 0)) * 100) / 100;
+      const unitCost = b.quantity > 0.0001
+        ? Math.round((totalCost / b.quantity) * 10000) / 10000
+        : (b.product.costPrice || 0);
       const rawBatches = batchesByKey.get(`${b.productId}:${b.warehouseId}`) || [];
 
       return {
@@ -113,6 +139,8 @@ export class StockService {
         quantity: b.quantity,
         unitCost,
         totalCost,
+        openLayers: open.length,
+        nextCost: open[0]?.unitCost ?? null,
         product: b.product,
         warehouse: b.warehouse,
         batches: rawBatches.map((l) => ({
@@ -136,6 +164,82 @@ export class StockService {
     const totalQty = items.reduce((s, i) => s + i.quantity, 0);
 
     return { items, grandTotal, totalQty, count: items.length };
+  }
+
+  /** دفعات FIFO لصنف في مخزن: كل دفعة دخلت بكام، فاضل منها كام، واتسحب منها فين */
+  async fifoDetail(productId: string, warehouseId: string) {
+    const product = await this.prisma.product.findUnique({ where: { id: productId }, select: { id: true, sku: true, name: true, unit: true, costPrice: true } });
+    if (!product) throw new NotFoundException('الصنف غير موجود');
+    const replay = await replayFifo(this.prisma, [productId]);
+    const res = replay.get(productId);
+    const layers = (res?.layers || [])
+      .filter((l) => l.warehouseId === warehouseId)
+      .sort((a, b) => a.date.getTime() - b.date.getTime());
+    const fallbackOuts = (res?.outs || [])
+      .filter((o) => o.warehouseId === warehouseId)
+      .flatMap((o) => o.allocations.filter((a) => a.fallback).map((a) => ({ reference: o.reference, type: o.type, date: o.createdAt, quantity: a.quantity, unitCost: a.unitCost })));
+
+    const refs = new Set<string>();
+    const add = (ref?: string | null) => { if (ref) refs.add(ref); };
+    layers.forEach((l) => { add(l.reference); add(l.viaTransfer); l.consumed.forEach((c) => add(c.reference)); });
+    fallbackOuts.forEach((o) => add(o.reference));
+    const list = [...refs];
+    const [purchases, sales, purchaseReturns, salesReturns, transfers] = list.length
+      ? await Promise.all([
+          this.prisma.purchaseInvoice.findMany({ where: { number: { in: list } }, select: { id: true, number: true, invoiceDate: true, supplier: { select: { name: true } } } }),
+          this.prisma.salesInvoice.findMany({ where: { number: { in: list } }, select: { id: true, number: true, invoiceDate: true, customer: { select: { name: true } } } }),
+          this.prisma.purchaseReturn.findMany({ where: { number: { in: list } }, select: { number: true, supplier: { select: { name: true } } } }),
+          this.prisma.salesReturn.findMany({ where: { number: { in: list } }, select: { number: true, customerName: true, customer: { select: { name: true } } } }),
+          this.prisma.stockTransfer.findMany({ where: { number: { in: list } }, select: { number: true, fromWarehouse: { select: { name: true } }, toWarehouse: { select: { name: true } } } }),
+        ])
+      : [[], [], [], [], []];
+    const party = new Map<string, string>();
+    purchases.forEach((p) => party.set(p.number, p.supplier.name));
+    sales.forEach((s) => party.set(s.number, s.customer.name));
+    purchaseReturns.forEach((r) => party.set(r.number, r.supplier.name));
+    salesReturns.forEach((r) => party.set(r.number, r.customer?.name || r.customerName || 'مرتجع بيع'));
+    transfers.forEach((t) => party.set(t.number, `${t.fromWarehouse.name} ← ${t.toWarehouse.name}`));
+    const docId = new Map<string, { kind: 'purchase' | 'sale'; id: string }>();
+    purchases.forEach((p) => docId.set(p.number, { kind: 'purchase', id: p.id }));
+    sales.forEach((s) => docId.set(s.number, { kind: 'sale', id: s.id }));
+
+    const shape = (l: FifoLayer) => ({
+      key: l.key,
+      type: l.type,
+      reference: l.reference,
+      viaTransfer: l.viaTransfer,
+      partyName: (l.reference && party.get(l.reference)) || null,
+      doc: (l.reference && docId.get(l.reference)) || null,
+      note: l.note,
+      date: l.date.getTime() === 0 ? null : l.date,
+      unitCost: l.unitCost,
+      quantity: l.quantity,
+      remaining: l.remaining,
+      used: Math.round((l.quantity - l.remaining) * 10000) / 10000,
+      consumed: l.consumed.map((c) => ({
+        ...c,
+        partyName: (c.reference && party.get(c.reference)) || null,
+        doc: (c.reference && docId.get(c.reference)) || null,
+      })),
+    });
+
+    const open = layers.filter((l) => l.remaining > 0.0001);
+    const qty = open.reduce((s, l) => s + l.remaining, 0);
+    const value = open.reduce((s, l) => s + l.remaining * l.unitCost, 0);
+    return {
+      product,
+      warehouseId,
+      remainingQty: Math.round(qty * 10000) / 10000,
+      remainingValue: Math.round(value * 100) / 100,
+      avgCost: qty > 0.0001 ? Math.round((value / qty) * 10000) / 10000 : 0,
+      nextCost: open[0]?.unitCost ?? null,
+      layers: layers.map(shape),
+      fallbackOuts: fallbackOuts.map((o) => ({ ...o, partyName: (o.reference && party.get(o.reference)) || null })),
+    };
+  }
+
+  recostAll() {
+    return recostAll(this.prisma);
   }
 
   async movements(params?: {
@@ -196,7 +300,7 @@ export class StockService {
     if (!mov) throw new NotFoundException('الحركة غير موجودة');
     await assertPeriodsOpen(this.prisma, mov.createdAt);
 
-    return this.prisma.$transaction(async (tx) => {
+    return this.withRecost([mov.productId], this.prisma.$transaction(async (tx) => {
       if (data.quantity !== undefined && data.quantity !== mov.quantity) {
         const delta = data.quantity - mov.quantity;
         const bal = await tx.stockBalance.findUnique({
@@ -226,7 +330,13 @@ export class StockService {
         },
         include: { product: true, warehouse: true },
       });
-    });
+    }));
+  }
+
+  private async withRecost<T>(productIds: string[], work: Promise<T>) {
+    const result = await work;
+    await recostProducts(this.prisma, productIds);
+    return result;
   }
 
   async deleteMovement(id: string) {
@@ -234,7 +344,7 @@ export class StockService {
     if (!mov) throw new NotFoundException('الحركة غير موجودة');
     await assertPeriodsOpen(this.prisma, mov.createdAt);
 
-    return this.prisma.$transaction(async (tx) => {
+    return this.withRecost([mov.productId], this.prisma.$transaction(async (tx) => {
       const bal = await tx.stockBalance.findUnique({
         where: {
           warehouseId_productId: {
@@ -254,7 +364,7 @@ export class StockService {
         });
       }
       return tx.stockMovement.delete({ where: { id } });
-    });
+    }));
   }
 
   /** تعديل بيانات دفعة شراء (تشغيلة / صلاحية / تكلفة البند) */
@@ -320,6 +430,7 @@ export class StockService {
       data: { costPrice: unitCost },
     });
 
+    await recostProducts(this.prisma, [line.productId]);
     return updated;
   }
 
@@ -334,7 +445,7 @@ export class StockService {
       throw new BadRequestException('لا يمكن حذف البند الوحيد في الفاتورة — احذف الفاتورة من المشتريات');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    return this.withRecost([line.productId], this.prisma.$transaction(async (tx) => {
       const bal = await tx.stockBalance.findUnique({
         where: {
           warehouseId_productId: {
@@ -353,17 +464,30 @@ export class StockService {
         });
       }
 
-      await tx.stockMovement.create({
-        data: {
-          warehouseId: line.invoice.warehouseId,
-          productId: line.productId,
-          type: StockMovementType.ADJUSTMENT,
-          quantity: -line.quantity,
-          unitCost: line.unitCost,
+      // نشيل حركة استلام الدفعة نفسها (مش نسحب من أقدم دفعة)
+      const own = await tx.stockMovement.findFirst({
+        where: {
           reference: line.invoice.number,
-          note: `حذف دفعة شراء${line.batchNumber ? ` (${line.batchNumber})` : ''}`,
+          productId: line.productId,
+          type: StockMovementType.PURCHASE,
+          quantity: line.quantity,
         },
       });
+      if (own) {
+        await tx.stockMovement.delete({ where: { id: own.id } });
+      } else {
+        await tx.stockMovement.create({
+          data: {
+            warehouseId: line.invoice.warehouseId,
+            productId: line.productId,
+            type: StockMovementType.ADJUSTMENT,
+            quantity: -line.quantity,
+            unitCost: line.unitCost,
+            reference: line.invoice.number,
+            note: `حذف دفعة شراء${line.batchNumber ? ` (${line.batchNumber})` : ''}`,
+          },
+        });
+      }
 
       await tx.purchaseInvoiceLine.delete({ where: { id: lineId } });
 
@@ -371,14 +495,14 @@ export class StockService {
         where: { invoiceId: line.invoiceId },
       });
       const subtotal = remaining.reduce((s, l) => s + l.total, 0);
-      const total = subtotal - line.invoice.discount + line.invoice.tax;
+      const total = subtotal - line.invoice.discount + line.invoice.tax - (line.invoice.scrapAmount || 0);
       await tx.purchaseInvoice.update({
         where: { id: line.invoiceId },
         data: { subtotal, total },
       });
 
       return { ok: true };
-    });
+    }));
   }
 
   lowStock() {
@@ -407,7 +531,7 @@ export class StockService {
     await assertPeriodsOpen(this.prisma, new Date());
 
     const number = await this.sequence.next('stock_transfer', 'TR');
-    return this.prisma.$transaction(async (tx) => {
+    return this.withRecost(data.lines.map((l) => l.productId), this.prisma.$transaction(async (tx) => {
       for (const line of data.lines) {
         const bal = await tx.stockBalance.findUnique({
           where: {
@@ -471,7 +595,7 @@ export class StockService {
           toWarehouse: true,
         },
       });
-    });
+    }));
   }
 
   listTransfers() {
@@ -489,11 +613,11 @@ export class StockService {
     warehouseId: string;
     note?: string;
     mode: 'set' | 'delta';
-    lines: { productId: string; quantity: number }[];
+    lines: { productId: string; quantity: number; unitCost?: number }[];
   }) {
     if (!data.lines?.length) throw new BadRequestException('أضف أصنافاً');
     await assertPeriodsOpen(this.prisma, new Date());
-    return this.prisma.$transaction(async (tx) => {
+    return this.withRecost(data.lines.map((l) => l.productId), this.prisma.$transaction(async (tx) => {
       let count = 0;
       for (const line of data.lines) {
         const bal = await tx.stockBalance.findUnique({
@@ -512,21 +636,30 @@ export class StockService {
         }
         if (Math.abs(delta) > 0.0001) {
           const product = await tx.product.findUnique({ where: { id: line.productId } });
+          const unitCost = line.unitCost !== undefined && line.unitCost !== null
+            ? Math.max(0, line.unitCost)
+            : (product?.costPrice || 0);
           await tx.stockMovement.create({
             data: {
               warehouseId: data.warehouseId,
               productId: line.productId,
               type: StockMovementType.ADJUSTMENT,
               quantity: delta,
-              unitCost: product?.costPrice || 0,
+              unitCost,
               note: data.note || (data.mode === 'set' ? 'جرد / رصيد افتتاحي' : 'تسوية'),
             },
           });
+          if (line.unitCost !== undefined && line.unitCost !== null && line.unitCost >= 0) {
+            await tx.product.update({
+              where: { id: line.productId },
+              data: { costPrice: unitCost },
+            });
+          }
           count += 1;
         }
       }
       return { ok: true, count };
-    });
+    }));
   }
 
   async expiring(days = 30) {

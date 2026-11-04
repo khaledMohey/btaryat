@@ -240,8 +240,14 @@ export function WarehousesPage() {
                       <div className="font-extrabold tabular-nums">{(row.quantity || 0).toLocaleString('ar-EG')} <span className="text-xs font-medium text-muted">وحدة · {row.itemCount || 0} صنف</span></div>
                     </div>
                     <div className="flex gap-1" onClick={(event) => event.stopPropagation()}>
-                      <IconAction label="تعديل" onClick={() => openEdit(row)}><Pencil size={14} /></IconAction>
-                      {user?.role === 'ADMIN' && <IconAction label="حذف" danger onClick={() => remove(row)}><Trash2 size={14} /></IconAction>}
+                      {row.code === 'RETURNS' ? (
+                        <Badge tone="amber">نظام</Badge>
+                      ) : (
+                        <>
+                          <IconAction label="تعديل" onClick={() => openEdit(row)}><Pencil size={14} /></IconAction>
+                          {user?.role === 'ADMIN' && <IconAction label="حذف" danger onClick={() => remove(row)}><Trash2 size={14} /></IconAction>}
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -294,8 +300,14 @@ export function WarehousesPage() {
                     {columns.visible('code') && <Td><span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs font-bold text-slate-700" dir="ltr">{row.code}</span></Td>}
                     <Td>
                       <div className="flex gap-1" onClick={(event) => event.stopPropagation()}>
-                        <IconAction label="تعديل" onClick={() => openEdit(row)}><Pencil size={14} /></IconAction>
-                        {user?.role === 'ADMIN' && <IconAction label="حذف" danger onClick={() => remove(row)}><Trash2 size={14} /></IconAction>}
+                        {row.code === 'RETURNS' ? (
+                          <Badge tone="amber">نظام</Badge>
+                        ) : (
+                          <>
+                            <IconAction label="تعديل" onClick={() => openEdit(row)}><Pencil size={14} /></IconAction>
+                            {user?.role === 'ADMIN' && <IconAction label="حذف" danger onClick={() => remove(row)}><Trash2 size={14} /></IconAction>}
+                          </>
+                        )}
                       </div>
                     </Td>
                   </tr>

@@ -2,7 +2,6 @@ import type { LucideIcon } from 'lucide-react';
 import {
   BarChart3,
   Boxes,
-  ClipboardList,
   FileBarChart,
   Landmark,
   LayoutDashboard,
@@ -72,7 +71,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: '/sales', label: 'المبيعات', page: 'sales', icon: ShoppingCart, keywords: 'فاتورة بيع sales' },
       { to: '/purchases', label: 'المشتريات', page: 'purchases', icon: ShoppingBag, keywords: 'فاتورة شراء purchase' },
       { to: '/returns', label: 'المرتجعات', page: 'returns', icon: Undo2, keywords: 'مرتجع return' },
-      { to: '/documents', label: 'عروض وأوامر', page: 'documents', icon: ClipboardList, keywords: 'عرض سعر أمر' },
       { to: '/cash', label: 'الخزنة', page: 'cash', icon: Wallet, keywords: 'نقدي خزنة cash' },
     ],
   },
