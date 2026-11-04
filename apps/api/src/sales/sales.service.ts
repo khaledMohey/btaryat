@@ -16,6 +16,7 @@ type ScrapInput = {
   scrapKg?: number;
   scrapPieces?: number;
   scrapPriceKg?: number;
+  scrapAmount?: number;
   scrapKind?: string;
 };
 
@@ -24,7 +25,10 @@ function scrapFields(data: ScrapInput) {
   const scrapKg = hasScrap ? Math.max(0, data.scrapKg || 0) : 0;
   const scrapPieces = hasScrap ? Math.max(1, Math.round(data.scrapPieces || 0)) : 0;
   const scrapPriceKg = hasScrap ? Math.max(0, data.scrapPriceKg || 0) : 0;
-  const scrapAmount = Math.round(scrapKg * scrapPriceKg * 100) / 100;
+  const computed = Math.round(scrapKg * scrapPriceKg * 100) / 100;
+  const scrapAmount = hasScrap
+    ? Math.max(0, Math.round((data.scrapAmount != null ? data.scrapAmount : computed) * 100) / 100)
+    : 0;
   const scrapKind = hasScrap && data.scrapKind === 'WARRANTY_SWAP' ? 'WARRANTY_SWAP' : 'SCRAP';
   return { hasScrap, scrapKg, scrapPieces, scrapPriceKg, scrapAmount, scrapKind };
 }
@@ -125,6 +129,7 @@ export class SalesService {
     scrapKg?: number;
     scrapPieces?: number;
     scrapPriceKg?: number;
+    scrapAmount?: number;
     lines: { productId: string; quantity: number; unitPrice: number; discount?: number }[];
   }) {
     if (!data.lines?.length) throw new BadRequestException('أضف بنوداً للفاتورة');
@@ -161,6 +166,7 @@ export class SalesService {
     scrapKg?: number;
     scrapPieces?: number;
     scrapPriceKg?: number;
+    scrapAmount?: number;
     lines: { productId: string; quantity: number; unitPrice: number; discount?: number }[];
   }) {
     await assertPeriodsOpen(this.prisma, data.invoiceDate || new Date());
@@ -389,6 +395,7 @@ export class SalesService {
     scrapKg?: number;
     scrapPieces?: number;
     scrapPriceKg?: number;
+    scrapAmount?: number;
     lines: { id?: string; productId: string; quantity: number; unitPrice: number; discount?: number }[];
   }) {
     const inv = await this.prisma.salesInvoice.findUnique({

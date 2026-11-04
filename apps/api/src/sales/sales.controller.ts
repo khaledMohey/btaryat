@@ -36,6 +36,7 @@ class CreateSalesDto {
   @IsOptional() @IsNumber() scrapKg?: number;
   @IsOptional() @IsNumber() scrapPieces?: number;
   @IsOptional() @IsNumber() scrapPriceKg?: number;
+  @IsOptional() @IsNumber() scrapAmount?: number;
   @IsOptional() @IsIn(['SCRAP', 'WARRANTY_SWAP']) scrapKind?: 'SCRAP' | 'WARRANTY_SWAP';
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => TenderDto) payments?: TenderDto[];
   @IsOptional() @IsBoolean() confirm?: boolean;

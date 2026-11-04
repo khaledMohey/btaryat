@@ -182,6 +182,7 @@ export function SalesPage() {
     scrapKg: '' as number | '',
     scrapPieces: '' as number | '',
     scrapPriceKg: '' as number | '',
+    scrapAmount: '' as number | '',
   });
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   const [posOpen, setPosOpen] = useState(false);
@@ -402,7 +403,7 @@ export function SalesPage() {
 
   const linesTotal = lines.reduce((s, l) => s + num(l.quantity) * num(l.unitPrice) - num(l.discount), 0);
   const taxAmount = Math.round((linesTotal - num(form.discount)) * num(form.tax) * 100) / 10000;
-  const scrapAmount = form.hasScrap ? Math.round(num(form.scrapKg) * num(form.scrapPriceKg) * 100) / 100 : 0;
+  const scrapAmount = form.hasScrap ? Math.max(0, num(form.scrapAmount)) : 0;
   // المطلوب من العميل فلوس — الخردة بتتسلّم عيني وبتدخل في الإيراد والربح بس
   const grand = linesTotal - num(form.discount) + taxAmount;
   const costKnown = canSeeCost && lines.some((l, i) => l.productId && costPreview[i]?.unitCost !== undefined);
@@ -423,7 +424,7 @@ export function SalesPage() {
     overStock && 'الكمية أكبر من المتاح في المخزن',
     form.hasScrap && !(num(form.scrapPieces) >= 1) && 'أدخل عدد البطاريات القديمة',
     form.hasScrap && form.scrapKind === 'SCRAP' && !(num(form.scrapKg) > 0) && 'أدخل وزن الخردة بالكيلو',
-    form.hasScrap && form.scrapKind === 'SCRAP' && !(num(form.scrapPriceKg) > 0) && 'أدخل سعر كيلو الخردة',
+    form.hasScrap && form.scrapKind === 'SCRAP' && !(num(form.scrapAmount) > 0) && 'أدخل قيمة الخردة',
     paidNow > grand + 0.009 && 'المدفوع أكبر من إجمالي الفاتورة',
     form.confirm && form.payments.some((part) => num(part.amount) > 0 && !part.methodId) && 'اختر طريقة الدفع لكل جزء',
   ].filter(Boolean) as string[];
@@ -510,6 +511,7 @@ export function SalesPage() {
       scrapKg: form.hasScrap ? num(form.scrapKg) : 0,
       scrapPieces: form.hasScrap ? num(form.scrapPieces) : 0,
       scrapPriceKg: form.hasScrap ? num(form.scrapPriceKg) : 0,
+      scrapAmount: form.hasScrap ? num(form.scrapAmount) : 0,
       lines: lines.filter((l) => l.productId).map((l) => ({
         id: l.id,
         productId: l.productId,
@@ -531,7 +533,7 @@ export function SalesPage() {
       setTriedSave(false);
       setForm({
         customerName: WALK_IN_NAME, warehouseId: '', discount: '', tax: '', payments: [emptyPart()], notes: '', confirm: true,
-        hasScrap: false, scrapKind: 'SCRAP', scrapKg: '', scrapPieces: '', scrapPriceKg: '',
+        hasScrap: false, scrapKind: 'SCRAP', scrapKg: '', scrapPieces: '', scrapPriceKg: '', scrapAmount: '',
       });
       setLines([emptyLine()]);
       setEditCredit(null);
@@ -590,6 +592,7 @@ export function SalesPage() {
       scrapKg: inv.hasScrap ? (inv.scrapKg || '') : '',
       scrapPieces: inv.hasScrap ? (inv.scrapPieces || '') : '',
       scrapPriceKg: inv.hasScrap ? (inv.scrapPriceKg || '') : '',
+      scrapAmount: inv.hasScrap ? (inv.scrapAmount || '') : '',
     });
     setLines(inv.lines.map((l) => ({
       id: l.id,
@@ -736,6 +739,7 @@ export function SalesPage() {
       scrapKg: '',
       scrapPieces: '',
       scrapPriceKg: '',
+      scrapAmount: '',
     });
     setLines([emptyLine()]);
     setOpen(true);
@@ -1046,7 +1050,9 @@ export function SalesPage() {
                 onChange={(e) => setForm({
                   ...form,
                   hasScrap: e.target.checked,
-                  ...(e.target.checked ? { scrapPieces: form.scrapPieces || 1 } : { scrapKg: '', scrapPieces: '', scrapPriceKg: '', scrapKind: 'SCRAP' as const }),
+                  ...(e.target.checked
+                    ? { scrapPieces: form.scrapPieces || 1 }
+                    : { scrapKg: '', scrapPieces: '', scrapPriceKg: '', scrapAmount: '', scrapKind: 'SCRAP' as const }),
                 })}
               />
               العميل هيسلّم بطارية قديمة؟ (خردة أو ضمان)
@@ -1078,18 +1084,38 @@ export function SalesPage() {
               </div>
               <div>
                 <Label>الوزن (كيلو){form.scrapKind === 'WARRANTY_SWAP' ? ' — اختياري' : ''}</Label>
-                <NumberInput value={form.scrapKg} onValueChange={(v) => setForm({ ...form, scrapKg: v })} />
+                <NumberInput
+                  value={form.scrapKg}
+                  onValueChange={(v) => {
+                    const nextKg = v;
+                    const computed = Math.round(num(nextKg) * num(form.scrapPriceKg) * 100) / 100;
+                    setForm({
+                      ...form,
+                      scrapKg: nextKg,
+                      scrapAmount: num(form.scrapPriceKg) > 0 ? (computed || '') : form.scrapAmount,
+                    });
+                  }}
+                />
               </div>
               <div>
                 <Label>سعر الكيلو</Label>
-                <NumberInput value={form.scrapPriceKg} onValueChange={(v) => setForm({ ...form, scrapPriceKg: v })} />
+                <NumberInput
+                  value={form.scrapPriceKg}
+                  onValueChange={(v) => {
+                    const nextPrice = v;
+                    const computed = Math.round(num(form.scrapKg) * num(nextPrice) * 100) / 100;
+                    setForm({
+                      ...form,
+                      scrapPriceKg: nextPrice,
+                      scrapAmount: num(form.scrapKg) > 0 ? (computed || '') : form.scrapAmount,
+                    });
+                  }}
+                />
               </div>
               <div>
                 <Label>قيمة الخردة</Label>
-                <div className="flex h-10 items-center rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-extrabold text-slate-900">
-                  {formatMoney(scrapAmount)}
-                </div>
-                <p className="mt-1 text-xs text-muted">الوزن × سعر الكيلو — بتدخل في إيراد وربح الفاتورة، ومش بتتضاف على المطلوب من العميل</p>
+                <NumberInput value={form.scrapAmount} onValueChange={(v) => setForm({ ...form, scrapAmount: v })} />
+                <p className="mt-1 text-xs text-muted">تتحسب من الوزن × السعر، وتقدر تعدّلها يدوي. بتدخل في الإيراد والربح ومش على المطلوب من العميل</p>
               </div>
             </div>
           </EditorSection>
