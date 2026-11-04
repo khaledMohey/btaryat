@@ -794,7 +794,9 @@ export function ReturnsPage() {
                 placeholder="اكتب اسم الصنف أو اتركه فاضي"
                 onChange={(productId) => setSalesForm({ ...salesForm, productId })}
               />
-              <p className="mt-1 text-xs text-muted">الصنف هيدخل مخزن المرتجعات مباشرة</p>
+              <p className="mt-1 text-xs text-muted">
+                لو سجّلت كيلوهات/قطع قديمة تحت، الصنف ده بيتسجّل في «فرز البطاريات القديمة». من غير خردة، يدخل مخزن المرتجعات.
+              </p>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
@@ -807,6 +809,7 @@ export function ReturnsPage() {
                 <NumberInput value={salesForm.scrapPieces} onValueChange={(v) => setSalesForm({ ...salesForm, scrapPieces: v })} />
               </div>
             </div>
+            <p className="text-xs text-muted">القطع/الكيلوهات القديمة تظهر في تبويب «فرز البطاريات القديمة» بعد الحفظ.</p>
 
             <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-semibold">
               <input
@@ -851,11 +854,14 @@ export function ReturnsPage() {
                   }),
                 })}
               />
-              هديله بطارية جديدة بدلها؟
+              هديله بطارية (سيرفس/جديدة) بدلها؟
             </label>
 
             {salesForm.giveReplacement && (
               <div className="space-y-3 rounded-xl border border-brand-200 bg-brand-50/40 p-3">
+                <p className="text-xs text-muted">
+                  لو دي بطارية سيرفس مؤقتة لحد ضمان المورد: بعد ما تفرز القديمة ضمان وتوصل البديل، زر «تسليم للزبون» هيرجّع السيرفس للمخزن.
+                </p>
                 <div>
                   <Label>مخزن البطارية الجديدة</Label>
                   <Select

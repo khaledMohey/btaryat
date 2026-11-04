@@ -11,7 +11,7 @@ type ProductRef = { id: string; name: string; sku: string };
 export type OldBattery = {
   id: string;
   number: string;
-  source: 'SALE_SCRAP' | 'WARRANTY_SWAP' | 'WARRANTY_WAIT' | 'MANUAL';
+  source: 'SALE_SCRAP' | 'WARRANTY_SWAP' | 'WARRANTY_WAIT' | 'MANUAL' | 'SALE_RETURN';
   ownership: 'SHOP' | 'CUSTOMER';
   productId: string | null;
   label: string | null;
@@ -31,15 +31,21 @@ export type OldBattery = {
   sentAt: string | null;
   receiverName: string | null;
   replacementAt: string | null;
+  loanerProductId: string | null;
+  loanerWarehouseId: string | null;
+  loanerReturnedAt: string | null;
   consumptionFee: number;
   feeSettlement: 'BALANCE' | 'CASH' | null;
   notes: string | null;
   product: ProductRef | null;
   stockProduct: ProductRef | null;
   replacementProduct: ProductRef | null;
+  loanerProduct: ProductRef | null;
   stockWarehouse: Ref | null;
   replacementWarehouse: Ref | null;
+  loanerWarehouse: Ref | null;
   salesInvoice: { id: string; number: string } | null;
+  salesReturn: { id: string; number: string } | null;
   supplier: Ref | null;
   scrapSale: { id: string; number: string } | null;
 };
@@ -53,6 +59,7 @@ const SOURCE_LABEL: Record<OldBattery['source'], string> = {
   WARRANTY_SWAP: 'ضمان — الزبون دفع فرق',
   WARRANTY_WAIT: 'ضمان زبون مستني',
   MANUAL: 'يدوي',
+  SALE_RETURN: 'من مرتجع بيع',
 };
 
 const DECISION_LABEL: Record<OldBattery['decision'], string> = {
@@ -339,6 +346,19 @@ export function OldBatteriesPanel({ mode, onCountsChange }: { mode: 'sort' | 'wa
     await act(`/returns/old-batteries/${row.id}/reject`, { toScrap }, 'تم تسجيل الرفض');
   }
 
+  async function deliverToCustomer(row: OldBattery) {
+    const loaner = row.loanerProduct && !row.loanerReturnedAt
+      ? `\nبطارية السيرفس «${row.loanerProduct.name}» هترجع لمخزن ${row.loanerWarehouse?.name || 'المستعمل/سيرفس'}.`
+      : '';
+    const ok = await confirm({
+      title: 'تسليم البديل للزبون',
+      message: `تسليم البطارية الجديدة لـ ${row.customerName || 'الزبون'}؟${loaner}`,
+      confirmLabel: 'تسليم',
+    });
+    if (!ok) return;
+    await act(`/returns/old-batteries/${row.id}/deliver`, undefined, loaner ? 'اتسلّمت للزبون وبطارية السيرفس رجعت للمخزن' : 'اتسلّمت للزبون');
+  }
+
   const sortTabs: [string, string, number | undefined][] = [
     ['sort', 'مستنية الفرز', summary?.toSort],
     ['scrap', 'كوم الخردة', summary?.scrapPile],
@@ -550,13 +570,24 @@ export function OldBatteriesPanel({ mode, onCountsChange }: { mode: 'sort' | 'wa
                       </>
                     )}
                     {b.claimStatus === 'RECEIVED' && b.ownership === 'CUSTOMER' && (
-                      <Button className="!px-2" onClick={() => act(`/returns/old-batteries/${b.id}/deliver`, undefined, 'اتسلّمت للزبون')}>تسليم للزبون</Button>
+                      <Button
+                        className="!px-2"
+                        onClick={() => deliverToCustomer(b)}
+                      >
+                        تسليم للزبون
+                      </Button>
                     )}
                     {b.claimStatus === 'RECEIVED' && (
                       <Button variant="ghost" className="!px-2" onClick={() => act(`/returns/old-batteries/${b.id}/undo-receive`, undefined, 'اتلغى الاستلام')}>إلغاء الاستلام</Button>
                     )}
                     {b.claimStatus === 'DELIVERED' && (
                       <Button variant="ghost" className="!px-2" onClick={() => act(`/returns/old-batteries/${b.id}/undo-deliver`, undefined, 'اتلغى التسليم')}>إلغاء التسليم</Button>
+                    )}
+                    {b.loanerProduct && (
+                      <div className="mt-1 text-[11px] text-muted">
+                        سيرفس مع الزبون: {b.loanerProduct.name}
+                        {b.loanerReturnedAt ? ' · رجعت للمخزن' : ''}
+                      </div>
                     )}
                     {(b.claimStatus === 'IN_SHOP' || b.claimStatus === 'REJECTED') && (
                       <Button variant="ghost" className="!px-2 text-rose-600" onClick={() => remove(b)}><Trash2 size={14} /></Button>
@@ -604,6 +635,8 @@ export function OldBatteriesPanel({ mode, onCountsChange }: { mode: 'sort' | 'wa
           kind={mode === 'sort' ? 'MANUAL' : 'WARRANTY_WAIT'}
           editing={editing}
           products={products}
+          warehouses={warehouses}
+          usedWarehouse={usedWarehouse}
           suppliers={suppliers}
           onClose={() => { setCreateOpen(false); setEditing(null); }}
           onSaved={() => { setCreateOpen(false); setEditing(null); load(); }}
@@ -944,10 +977,12 @@ function ReceiveModal({ battery, products, warehouses, methods, onClose, onSaved
   );
 }
 
-function CreateModal({ kind, editing, products, suppliers, onClose, onSaved }: {
+function CreateModal({ kind, editing, products, warehouses, usedWarehouse, suppliers, onClose, onSaved }: {
   kind: 'MANUAL' | 'WARRANTY_WAIT';
   editing: OldBattery | null;
   products: ProductRef[];
+  warehouses: Ref[];
+  usedWarehouse: Ref | null;
   suppliers: Ref[];
   onClose: () => void;
   onSaved: () => void;
@@ -965,11 +1000,17 @@ function CreateModal({ kind, editing, products, suppliers, onClose, onSaved }: {
     ageBand: null as string | null,
     supplierId: '',
     notes: editing?.notes || '',
+    giveLoaner: false,
+    loanerWarehouseId: usedWarehouse?.id || '',
+    loanerProductId: '',
   });
   const [saving, setSaving] = useState(false);
   async function save() {
     if (!form.productId && !form.label.trim()) return toast.error('اختار نوع البطارية');
     if (wait && !form.customerName.trim()) return toast.error('اكتب اسم الزبون');
+    if (wait && form.giveLoaner && (!form.loanerProductId || !form.loanerWarehouseId)) {
+      return toast.error('اختار بطارية السيرفس والمخزن');
+    }
     setSaving(true);
     try {
       if (editing) {
@@ -999,6 +1040,10 @@ function CreateModal({ kind, editing, products, suppliers, onClose, onSaved }: {
             ageBand: form.ageBand || undefined,
             supplierId: form.supplierId || undefined,
             notes: form.notes || undefined,
+            ...(wait && form.giveLoaner ? {
+              loanerProductId: form.loanerProductId,
+              loanerWarehouseId: form.loanerWarehouseId,
+            } : {}),
           }),
         });
       }
@@ -1062,6 +1107,38 @@ function CreateModal({ kind, editing, products, suppliers, onClose, onSaved }: {
           <div>
             <Label>قيمتها عليك (اللي دفعته فيها)</Label>
             <NumberInput value={form.intakeValue} onValueChange={(intakeValue) => setForm({ ...form, intakeValue })} />
+          </div>
+        )}
+        {wait && !editing && (
+          <div className="space-y-3 rounded-xl border border-sky-200 bg-sky-50/50 p-3">
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
+              <input
+                type="checkbox"
+                checked={form.giveLoaner}
+                onChange={(e) => setForm({
+                  ...form,
+                  giveLoaner: e.target.checked,
+                  loanerWarehouseId: form.loanerWarehouseId || usedWarehouse?.id || '',
+                })}
+              />
+              هديه بطارية سيرفس مؤقت لحد ما ياخد البديل؟
+            </label>
+            {form.giveLoaner && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <Label>مخزن السيرفس</Label>
+                  <Select value={form.loanerWarehouseId} onChange={(e) => setForm({ ...form, loanerWarehouseId: e.target.value, loanerProductId: '' })}>
+                    <option value="">اختر المخزن</option>
+                    {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                  </Select>
+                </div>
+                <div>
+                  <Label>بطارية السيرفس</Label>
+                  <ProductSelect products={products} value={form.loanerProductId} onChange={(loanerProductId) => setForm({ ...form, loanerProductId })} placeholder="اختار البطارية" />
+                </div>
+              </div>
+            )}
+            <p className="text-xs text-muted">لما تضغط «تسليم للزبون» بعد وصول البديل، بطارية السيرفس هترجع للمخزن أوتوماتيك.</p>
           </div>
         )}
         <div>

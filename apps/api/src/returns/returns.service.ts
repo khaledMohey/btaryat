@@ -6,6 +6,7 @@ import { assertPeriodsOpen } from '../settings/period-lock';
 import { pageResult, readPage } from '../common/paging';
 import { RETURNS_WAREHOUSE_CODE, RETURNS_WAREHOUSE_NAME } from '../common/returns-warehouse';
 import { recostProducts } from '../common/fifo';
+import { syncSalesReturnOldBatteries } from '../oldbatteries/oldbatteries.service';
 
 function sliceCost(
   lines: { productId: string; quantity: number; unitCost: number }[],
@@ -474,7 +475,9 @@ export class ReturnsService implements OnModuleInit {
     warehouseId: string,
     data: ReturnType<ReturnsService['normalizeSalesPayload']>,
   ) {
-    const stockQty = data.productId ? (data.scrapPieces > 0 ? data.scrapPieces : 1) : 0;
+    // لو في قطع خردة/قديمة → بتروح طابور الفرز مش مخزن المرتجعات
+    const toSorting = data.scrapPieces > 0 || data.scrapKg > 0;
+    const stockQty = data.productId && !toSorting ? 1 : 0;
     let unitCost = 0;
     if (data.productId) {
       const product = await tx.product.findUnique({ where: { id: data.productId }, select: { costPrice: true } });
@@ -627,8 +630,9 @@ export class ReturnsService implements OnModuleInit {
     const warehouse = await this.ensureReturnsWarehouse();
     const number = await this.sequence.next('sales_return', 'SR');
 
-    return this.withRecost([normalized.productId, normalized.replacementProductId], this.prisma.$transaction(async (tx) => {
+    const created = await this.withRecost([normalized.productId, normalized.replacementProductId], this.prisma.$transaction(async (tx) => {
       const { stockQty, unitCost } = await this.applySalesReturnEffects(tx, number, warehouse.id, normalized);
+      const pieceQty = normalized.scrapPieces > 0 ? normalized.scrapPieces : (normalized.productId && stockQty ? stockQty : (normalized.scrapKg > 0 ? 1 : 0));
       return tx.salesReturn.create({
         data: {
           number,
@@ -648,7 +652,7 @@ export class ReturnsService implements OnModuleInit {
             ? {
                 create: [{
                   productId: normalized.productId,
-                  quantity: stockQty || normalized.scrapPieces || 1,
+                  quantity: pieceQty || 1,
                   unitPrice: 0,
                   unitCost,
                   total: 0,
@@ -659,6 +663,8 @@ export class ReturnsService implements OnModuleInit {
         include: this.salesInclude(),
       });
     }));
+    await syncSalesReturnOldBatteries(this.prisma, this.sequence, created.id);
+    return this.prisma.salesReturn.findUnique({ where: { id: created.id }, include: this.salesInclude() });
   }
 
   private async withRecost<T>(productIds: (string | null | undefined)[], work: Promise<T>) {
@@ -683,10 +689,11 @@ export class ReturnsService implements OnModuleInit {
       normalized.replacementProductId,
     ];
 
-    return this.withRecost(touched, this.prisma.$transaction(async (tx) => {
+    const updated = await this.withRecost(touched, this.prisma.$transaction(async (tx) => {
       await this.reverseSalesReturnEffects(tx, existing);
       const { stockQty, unitCost } = await this.applySalesReturnEffects(tx, existing.number, warehouse.id, normalized);
       await tx.salesReturnLine.deleteMany({ where: { returnId: id } });
+      const pieceQty = normalized.scrapPieces > 0 ? normalized.scrapPieces : (normalized.productId && stockQty ? stockQty : (normalized.scrapKg > 0 ? 1 : 0));
       return tx.salesReturn.update({
         where: { id },
         data: {
@@ -706,7 +713,7 @@ export class ReturnsService implements OnModuleInit {
             ? {
                 create: [{
                   productId: normalized.productId,
-                  quantity: stockQty || normalized.scrapPieces || 1,
+                  quantity: pieceQty || 1,
                   unitPrice: 0,
                   unitCost,
                   total: 0,
@@ -717,16 +724,25 @@ export class ReturnsService implements OnModuleInit {
         include: this.salesInclude(),
       });
     }));
+    await syncSalesReturnOldBatteries(this.prisma, this.sequence, id);
+    return this.prisma.salesReturn.findUnique({ where: { id }, include: this.salesInclude() }) || updated;
   }
 
   async deleteSalesReturn(id: string) {
     await assertPeriodsOpen(this.prisma, new Date());
     const existing = await this.prisma.salesReturn.findUnique({
       where: { id },
-      include: { lines: true },
+      include: { lines: true, oldBatteries: { select: { id: true, decision: true, loanerReturnedAt: true } } },
     });
     if (!existing) throw new NotFoundException('مرتجع البيع غير موجود');
+    if (existing.oldBatteries.some((b) => b.decision !== 'PENDING')) {
+      throw new BadRequestException('في بطاريات من المرتجع اتفرزت بالفعل — رجّعها للفرز أو امسحها الأول');
+    }
+    if (existing.oldBatteries.some((b) => b.loanerReturnedAt)) {
+      throw new BadRequestException('بطارية السيرفس اترجّعت للمخزن بالفعل — ألغي التسليم الأول');
+    }
 
+    await syncSalesReturnOldBatteries(this.prisma, this.sequence, id, { clear: true });
     return this.withRecost([...existing.lines.map((l) => l.productId), existing.replacementProductId], this.prisma.$transaction(async (tx) => {
       await this.reverseSalesReturnEffects(tx, existing);
       await tx.salesReturn.delete({ where: { id } });

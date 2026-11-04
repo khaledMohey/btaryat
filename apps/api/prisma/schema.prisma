@@ -127,6 +127,7 @@ model Warehouse {
   replacementReturns     SalesReturn[]       @relation("ReturnReplacementWarehouse")
   oldBatteriesStocked    OldBattery[]        @relation("OldBatteryStockWarehouse")
   oldBatteryReplacements OldBattery[]        @relation("OldBatteryReplacementWarehouse")
+  oldBatteryLoaners      OldBattery[]        @relation("OldBatteryLoanerWarehouse")
   transfersFrom          StockTransfer[]     @relation("TransferFrom")
   transfersTo            StockTransfer[]     @relation("TransferTo")
   locations              WarehouseLocation[]
@@ -191,6 +192,7 @@ model Product {
   oldBatteries           OldBattery[]          @relation("OldBatteryProduct")
   oldBatteriesStocked    OldBattery[]          @relation("OldBatteryStockProduct")
   oldBatteryReplacements OldBattery[]          @relation("OldBatteryReplacementProduct")
+  oldBatteryLoaners      OldBattery[]          @relation("OldBatteryLoanerProduct")
 }
 
 /// أصناف مربوطة بمخزن معيّن. لو الصنف مفيهوش صفوف هنا يبقى متاح لكل المخازن.
@@ -527,6 +529,7 @@ model SalesReturn {
   replacementProduct   Product?          @relation("ReturnReplacementProduct", fields: [replacementProductId], references: [id])
   replacementWarehouse Warehouse?        @relation("ReturnReplacementWarehouse", fields: [replacementWarehouseId], references: [id])
   lines                SalesReturnLine[]
+  oldBatteries         OldBattery[]
 }
 
 model SalesReturnLine {
@@ -589,6 +592,7 @@ model OldBattery {
   productId              String?
   label                  String?
   salesInvoiceId         String?
+  salesReturnId          String?
   customerId             String?
   customerName           String?
   customerPhone          String?
@@ -610,6 +614,12 @@ model OldBattery {
   replacementAt          DateTime?
   replacementProductId   String?
   replacementWarehouseId String?
+  /// بطارية سيرفس/مستعمل اتسلّمت للزبون مؤقتًا لحد ما ياخد البديل من المورد
+  loanerProductId        String?
+  loanerWarehouseId      String?
+  loanerUnitCost         Float?
+  loanerIssuedAt         DateTime?
+  loanerReturnedAt       DateTime?
   consumptionFee         Float     @default(0)
   feeSettlement          String?
   feeMethodId            String?
@@ -622,9 +632,12 @@ model OldBattery {
   product              Product?      @relation("OldBatteryProduct", fields: [productId], references: [id], onDelete: SetNull)
   stockProduct         Product?      @relation("OldBatteryStockProduct", fields: [stockProductId], references: [id], onDelete: SetNull)
   replacementProduct   Product?      @relation("OldBatteryReplacementProduct", fields: [replacementProductId], references: [id], onDelete: SetNull)
+  loanerProduct        Product?      @relation("OldBatteryLoanerProduct", fields: [loanerProductId], references: [id], onDelete: SetNull)
   stockWarehouse       Warehouse?    @relation("OldBatteryStockWarehouse", fields: [stockWarehouseId], references: [id], onDelete: SetNull)
   replacementWarehouse Warehouse?    @relation("OldBatteryReplacementWarehouse", fields: [replacementWarehouseId], references: [id], onDelete: SetNull)
+  loanerWarehouse      Warehouse?    @relation("OldBatteryLoanerWarehouse", fields: [loanerWarehouseId], references: [id], onDelete: SetNull)
   salesInvoice         SalesInvoice? @relation(fields: [salesInvoiceId], references: [id], onDelete: SetNull)
+  salesReturn          SalesReturn?  @relation(fields: [salesReturnId], references: [id], onDelete: SetNull)
   customer             Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
   supplier             Supplier?     @relation(fields: [supplierId], references: [id], onDelete: SetNull)
   scrapSale            ScrapSale?    @relation(fields: [scrapSaleId], references: [id], onDelete: SetNull)
@@ -633,6 +646,7 @@ model OldBattery {
   @@index([claimStatus])
   @@index([supplierId])
   @@index([salesInvoiceId])
+  @@index([salesReturnId])
 }
 
 /// بيع خردة بالوزن لمورد. بمياه = خصم نسبة من الوزن.

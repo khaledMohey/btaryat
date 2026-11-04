@@ -68,9 +68,12 @@ export class OldBatteriesService implements OnModuleInit {
       product: { select: { id: true, sku: true, name: true } },
       stockProduct: { select: { id: true, sku: true, name: true } },
       replacementProduct: { select: { id: true, sku: true, name: true } },
+      loanerProduct: { select: { id: true, sku: true, name: true } },
       stockWarehouse: { select: { id: true, name: true } },
       replacementWarehouse: { select: { id: true, name: true } },
+      loanerWarehouse: { select: { id: true, name: true } },
       salesInvoice: { select: { id: true, number: true } },
+      salesReturn: { select: { id: true, number: true } },
       supplier: { select: { id: true, name: true } },
       scrapSale: { select: { id: true, number: true } },
     } satisfies Prisma.OldBatteryInclude;
@@ -138,37 +141,78 @@ export class OldBatteriesService implements OnModuleInit {
     ageBand?: string;
     supplierId?: string;
     notes?: string;
+    loanerProductId?: string;
+    loanerWarehouseId?: string;
   }) {
     const count = Math.max(1, Math.min(50, Math.round(data.quantity || 1)));
     const wait = data.kind === 'WARRANTY_WAIT';
     if (wait && !data.customerName?.trim()) throw new BadRequestException('اكتب اسم الزبون');
     if (!data.productId && !data.label?.trim()) throw new BadRequestException('اختار نوع البطارية');
+    const loanerProductId = data.loanerProductId?.trim() || '';
+    const loanerWarehouseId = data.loanerWarehouseId?.trim() || '';
+    if ((loanerProductId || loanerWarehouseId) && (!loanerProductId || !loanerWarehouseId)) {
+      throw new BadRequestException('اختار بطارية السيرفس والمخزن مع بعض');
+    }
+    if (loanerProductId && !wait) throw new BadRequestException('بطارية السيرفس للضمان المستني بس');
     const customer = data.customerName?.trim()
       ? await this.prisma.customer.findFirst({ where: { name: data.customerName.trim() }, select: { id: true } })
       : null;
     const age = this.ageOf(data.productionDate, data.ageBand);
+    let loanerCost = 0;
+    if (loanerProductId) {
+      const product = await this.prisma.product.findUnique({ where: { id: loanerProductId }, select: { costPrice: true } });
+      if (!product) throw new BadRequestException('بطارية السيرفس غير موجودة');
+      loanerCost = product.costPrice || 0;
+    }
     const numbers: string[] = [];
     for (let i = 0; i < count; i++) numbers.push(await this.sequence.next('old_battery', 'OB'));
-    await this.prisma.oldBattery.createMany({
-      data: numbers.map((number) => ({
-        number,
-        source: wait ? 'WARRANTY_WAIT' : 'MANUAL',
-        ownership: wait ? 'CUSTOMER' : 'SHOP',
-        productId: data.productId || null,
-        label: data.label?.trim() || null,
-        customerId: customer?.id || null,
-        customerName: data.customerName?.trim() || null,
-        customerPhone: data.customerPhone?.trim() || null,
-        intakeValue: wait ? 0 : Math.max(0, data.intakeValue || 0),
-        productionDate: age.productionDate,
-        ageBand: age.ageBand,
-        decision: wait ? 'WARRANTY' : 'PENDING',
-        claimStatus: wait ? 'IN_SHOP' : null,
-        supplierId: wait ? data.supplierId || null : null,
-        sortedAt: wait ? new Date() : null,
-        notes: data.notes?.trim() || null,
-      })),
+    await this.prisma.$transaction(async (tx) => {
+      if (loanerProductId) {
+        for (const number of numbers) {
+          const bal = await tx.stockBalance.findUnique({
+            where: { warehouseId_productId: { warehouseId: loanerWarehouseId, productId: loanerProductId } },
+          });
+          if (!bal || bal.quantity < 1) throw new BadRequestException('كمية بطارية السيرفس غير كافية في المخزن');
+          await tx.stockBalance.update({ where: { id: bal.id }, data: { quantity: { decrement: 1 } } });
+          await tx.stockMovement.create({
+            data: {
+              warehouseId: loanerWarehouseId,
+              productId: loanerProductId,
+              type: StockMovementType.SALE,
+              quantity: -1,
+              unitCost: loanerCost,
+              reference: `${number}-LOAN`,
+              note: `سيرفس مؤقت للزبون — ضمان ${number}`,
+            },
+          });
+        }
+      }
+      await tx.oldBattery.createMany({
+        data: numbers.map((number) => ({
+          number,
+          source: wait ? 'WARRANTY_WAIT' : 'MANUAL',
+          ownership: wait ? 'CUSTOMER' : 'SHOP',
+          productId: data.productId || null,
+          label: data.label?.trim() || null,
+          customerId: customer?.id || null,
+          customerName: data.customerName?.trim() || null,
+          customerPhone: data.customerPhone?.trim() || null,
+          intakeValue: wait ? 0 : Math.max(0, data.intakeValue || 0),
+          productionDate: age.productionDate,
+          ageBand: age.ageBand,
+          decision: wait ? 'WARRANTY' : 'PENDING',
+          claimStatus: wait ? 'IN_SHOP' : null,
+          supplierId: wait ? data.supplierId || null : null,
+          sortedAt: wait ? new Date() : null,
+          notes: data.notes?.trim() || null,
+          loanerProductId: loanerProductId || null,
+          loanerWarehouseId: loanerWarehouseId || null,
+          loanerUnitCost: loanerProductId ? loanerCost : null,
+          loanerIssuedAt: loanerProductId ? new Date() : null,
+        })),
+      });
     });
+    if (loanerProductId) await recostProducts(this.prisma, [loanerProductId]);
     return this.prisma.oldBattery.findMany({ where: { number: { in: numbers } }, include: this.include() });
   }
 
@@ -464,13 +508,41 @@ export class OldBatteriesService implements OnModuleInit {
   async deliver(id: string, undo = false) {
     const row = await this.findOne(id);
     if (row.ownership !== 'CUSTOMER') throw new BadRequestException('البطارية دي ملك المحل');
-    if (undo) {
-      if (row.claimStatus !== 'DELIVERED') throw new BadRequestException('البطارية مش متسلّمة');
-      await this.prisma.oldBattery.update({ where: { id }, data: { claimStatus: 'RECEIVED', deliveredAt: null } });
-    } else {
-      if (row.claimStatus !== 'RECEIVED') throw new BadRequestException('البديل لسه موصلش');
-      await this.prisma.oldBattery.update({ where: { id }, data: { claimStatus: 'DELIVERED', deliveredAt: new Date() } });
-    }
+    const hasLoaner = !!(row.loanerProductId && row.loanerWarehouseId);
+    const touched: string[] = [];
+    await this.prisma.$transaction(async (tx) => {
+      if (undo) {
+        if (row.claimStatus !== 'DELIVERED') throw new BadRequestException('البطارية مش متسلّمة');
+        if (hasLoaner && row.loanerReturnedAt) {
+          touched.push(...await this.stockOut(tx, `${row.number}-LOAN-RET`));
+        }
+        await tx.oldBattery.update({
+          where: { id },
+          data: { claimStatus: 'RECEIVED', deliveredAt: null, loanerReturnedAt: null },
+        });
+      } else {
+        if (row.claimStatus !== 'RECEIVED') throw new BadRequestException('البديل لسه موصلش');
+        if (hasLoaner && !row.loanerReturnedAt) {
+          await this.stockIn(tx, {
+            warehouseId: row.loanerWarehouseId!,
+            productId: row.loanerProductId!,
+            unitCost: row.loanerUnitCost || 0,
+            reference: `${row.number}-LOAN-RET`,
+            note: `رجوع سيرفس من الزبون بعد تسليم البديل — ${row.number}`,
+          });
+          touched.push(row.loanerProductId!);
+        }
+        await tx.oldBattery.update({
+          where: { id },
+          data: {
+            claimStatus: 'DELIVERED',
+            deliveredAt: new Date(),
+            loanerReturnedAt: hasLoaner ? new Date() : null,
+          },
+        });
+      }
+    });
+    if (touched.length) await recostProducts(this.prisma, touched);
     return this.findOne(id);
   }
 
@@ -499,6 +571,90 @@ export class OldBatteriesService implements OnModuleInit {
     });
     await recostProducts(this.prisma, touched);
     return { ok: true };
+  }
+}
+
+/**
+ * خردة/بطارية قديمة من مرتجع البيع → طابور الفرز.
+ * لو اديتله بطارية سيرفس، بتتسجّل على البطارية وترجع للمخزن لما الزبون يستلم البديل من المورد.
+ */
+export async function syncSalesReturnOldBatteries(
+  prisma: PrismaService,
+  sequence: SequenceService,
+  returnId: string,
+  opts?: { clear?: boolean },
+) {
+  try {
+    const row = await prisma.salesReturn.findUnique({
+      where: { id: returnId },
+      include: {
+        lines: { take: 1 },
+        oldBatteries: true,
+        replacementProduct: { select: { costPrice: true } },
+      },
+    });
+    if (!row) return;
+    if (opts?.clear) {
+      const pending = row.oldBatteries.filter((b) => b.decision === 'PENDING');
+      if (pending.length) await prisma.oldBattery.deleteMany({ where: { id: { in: pending.map((b) => b.id) } } });
+      return;
+    }
+    const desired = Math.max(0, Math.round(row.scrapPieces || 0)) || (row.scrapKg > 0 ? 1 : 0);
+    const each = desired ? round2((row.consumptionAmount || 0) / desired) : 0;
+    const productId = row.lines[0]?.productId || null;
+    const weightEach = desired && row.scrapKg > 0 ? round2(row.scrapKg / desired) : null;
+    const pending = row.oldBatteries.filter((b) => b.decision === 'PENDING');
+    const sorted = row.oldBatteries.length - pending.length;
+    const keepPending = Math.max(0, desired - sorted);
+    const extra = pending.slice(keepPending);
+    if (extra.length) await prisma.oldBattery.deleteMany({ where: { id: { in: extra.map((b) => b.id) } } });
+
+    const loanerCount = row.giveReplacement ? Math.max(0, Math.round(row.replacementQty || 0)) : 0;
+    const loanerCost = row.replacementProduct?.costPrice || 0;
+    const ownership = row.giveReplacement ? 'CUSTOMER' : 'SHOP';
+
+    const keep = pending.slice(0, keepPending);
+    for (let i = 0; i < keep.length; i++) {
+      const withLoaner = i < loanerCount && !!row.replacementProductId && !!row.replacementWarehouseId;
+      await prisma.oldBattery.update({
+        where: { id: keep[i].id },
+        data: {
+          source: 'SALE_RETURN',
+          ownership,
+          productId,
+          customerName: row.customerName,
+          intakeValue: each,
+          weightKg: weightEach,
+          receivedAt: row.returnDate,
+          loanerProductId: withLoaner ? row.replacementProductId : null,
+          loanerWarehouseId: withLoaner ? row.replacementWarehouseId : null,
+          loanerUnitCost: withLoaner ? loanerCost : null,
+          loanerIssuedAt: withLoaner ? (keep[i].loanerIssuedAt || row.createdAt) : null,
+        },
+      });
+    }
+    for (let i = keep.length; i < keepPending; i++) {
+      const withLoaner = i < loanerCount && !!row.replacementProductId && !!row.replacementWarehouseId;
+      await prisma.oldBattery.create({
+        data: {
+          number: await sequence.next('old_battery', 'OB'),
+          source: 'SALE_RETURN',
+          ownership,
+          productId,
+          salesReturnId: row.id,
+          customerName: row.customerName,
+          intakeValue: each,
+          weightKg: weightEach,
+          receivedAt: row.returnDate,
+          loanerProductId: withLoaner ? row.replacementProductId : null,
+          loanerWarehouseId: withLoaner ? row.replacementWarehouseId : null,
+          loanerUnitCost: withLoaner ? loanerCost : null,
+          loanerIssuedAt: withLoaner ? new Date() : null,
+        },
+      });
+    }
+  } catch (error) {
+    console.error('sync sales-return old batteries failed', error);
   }
 }
 

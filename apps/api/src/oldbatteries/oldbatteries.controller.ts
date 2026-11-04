@@ -14,6 +14,8 @@ class CreateOldBatteryDto {
   @IsOptional() @IsString() ageBand?: string;
   @IsOptional() @IsString() supplierId?: string;
   @IsOptional() @IsString() notes?: string;
+  @IsOptional() @IsString() loanerProductId?: string;
+  @IsOptional() @IsString() loanerWarehouseId?: string;
 }
 
 class UpdateOldBatteryDto {
